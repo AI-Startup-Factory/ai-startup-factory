@@ -1,39 +1,34 @@
 import requests
 
 
-def fetch_reddit():
-    url = "https://www.reddit.com/r/startups.json"
+def fetch_hackernews():
+    url = "https://hacker-news.firebaseio.com/v0/topstories.json"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (AIStartupFactoryBot)"
-    }
-
-    res = requests.get(url, headers=headers, timeout=10)
+    res = requests.get(url)
 
     if res.status_code != 200:
-        print("Failed to fetch Reddit:", res.status_code)
+        print("Failed to fetch HN stories")
         return []
 
-    try:
-        data = res.json()
-    except Exception as e:
-        print("JSON error:", e)
-        print("Response text:", res.text[:200])
-        return []
+    story_ids = res.json()[:10]
 
     posts = []
 
-    for post in data["data"]["children"]:
-        title = post["data"]["title"]
-        posts.append(title)
+    for sid in story_ids:
+        story_url = f"https://hacker-news.firebaseio.com/v0/item/{sid}.json"
+        story = requests.get(story_url).json()
+
+        if story and "title" in story:
+            posts.append(story["title"])
 
     return posts
 
 
 if __name__ == "__main__":
-    posts = fetch_reddit()
 
-    print("Fetched posts:")
+    posts = fetch_hackernews()
 
-    for p in posts[:10]:
+    print("Fetched HackerNews posts:")
+
+    for p in posts:
         print("-", p)
