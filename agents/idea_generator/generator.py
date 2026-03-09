@@ -1,54 +1,58 @@
-import requests
 import os
-from openai import OpenAI
+import json
+import requests
 
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-def fetch_hackernews():
-    url = "https://hacker-news.firebaseio.com/v0/topstories.json"
-    story_ids = requests.get(url).json()[:5]
-
-    posts = []
-
-    for sid in story_ids:
-        story = requests.get(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json").json()
-        if story and "title" in story:
-            posts.append(story["title"])
-
-    return posts
-
+def load_posts():
+    with open("data/trends.json") as f:
+        return json.load(f)
 
 def generate_ideas(posts):
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    headlines = [p["title"] for p in posts[:5]]
+
+    print("Headlines:")
+    for h in headlines:
+        print("-", h)
 
     prompt = f"""
 You are a startup idea generator.
 
-Based on these tech news headlines:
+From the following tech headlines, generate 5 startup ideas.
 
-{posts}
+Headlines:
+{headlines}
 
-Identify possible problems users might have and generate 3 startup ideas.
-Return short ideas only.
+Return concise ideas.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "openai/gpt-oss-120b:free",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
     )
 
-    return response.choices[0].message.content
+    data = response.json()
+
+    ideas = data["choices"][0]["message"]["content"]
+
+    return ideas
 
 
 if __name__ == "__main__":
 
-    posts = fetch_hackernews()
-
-    print("Headlines:")
-    for p in posts:
-        print("-", p)
+    posts = load_posts()
 
     ideas = generate_ideas(posts)
 
-    print("\nGenerated Startup Ideas:\n")
+    print("\nGenerated Ideas:\n")
     print(ideas)
