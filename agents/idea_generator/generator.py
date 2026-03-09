@@ -36,7 +36,7 @@ Return concise ideas.
             "Content-Type": "application/json",
         },
         json={
-            "model": "openai/gpt-oss-120b:free",
+            "model": "z-ai/glm-4.5-air:free",
             "messages": [
                 {"role": "user", "content": prompt}
             ]
