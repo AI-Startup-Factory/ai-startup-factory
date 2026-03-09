@@ -7,7 +7,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-MODEL = "google/gemma-3-27b-it:free"
+MODEL = "google/gemma-3-12b-it:free"
 
 
 def check_env():
