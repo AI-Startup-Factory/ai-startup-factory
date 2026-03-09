@@ -4,9 +4,11 @@ import requests
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+
 def load_posts():
     with open("data/trends.json") as f:
         return json.load(f)
+
 
 def generate_ideas(posts):
 
@@ -43,10 +45,10 @@ Return concise ideas.
 
     data = response.json()
 
-print("\nFULL API RESPONSE:")
-print(data)
+    print("\nFULL API RESPONSE:")
+    print(data)
 
-ideas = data["choices"][0]["message"]["content"]
+    ideas = data["choices"][0]["message"]["content"]
 
     return ideas
 
