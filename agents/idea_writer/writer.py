@@ -28,6 +28,32 @@ def load_trends():
         sys.exit(1)
 
 
+# ===============================
+# CHECK DUPLICATE BEFORE AI CALL
+# ===============================
+def idea_exists(problem):
+
+    url = f"{SUPABASE_URL}/rest/v1/ideas?problem=eq.{problem}&select=id"
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+
+    r = requests.get(url, headers=headers)
+
+    if r.status_code != 200:
+        print("Supabase check error:", r.text)
+        return False
+
+    data = r.json()
+
+    return len(data) > 0
+
+
+# ===============================
+# CALL AI (OPENROUTER)
+# ===============================
 def generate_startup_analysis(problem):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -73,18 +99,20 @@ Return ONLY valid JSON:
 
     content = r.json()["choices"][0]["message"]["content"]
 
-    # Bersihkan markdown code block dari AI
+    # Remove markdown formatting
     content = content.replace("```json", "").replace("```", "").strip()
 
     try:
-        data = json.loads(content)
-        return data
+        return json.loads(content)
     except Exception as e:
         print("JSON parse error:", e)
         print("RAW AI RESPONSE:", content)
         return None
 
 
+# ===============================
+# INSERT INTO SUPABASE
+# ===============================
 def save_to_supabase(problem, analysis):
 
     url = f"{SUPABASE_URL}/rest/v1/ideas"
@@ -110,13 +138,14 @@ def save_to_supabase(problem, analysis):
 
     if r.status_code == 201:
         print("Inserted:", problem)
-    elif r.status_code == 409:
-        print("Duplicate skipped:", problem)
     else:
         print("Insert error:", r.status_code)
         print("Response:", r.text)
 
 
+# ===============================
+# MAIN PIPELINE
+# ===============================
 def main():
 
     check_env()
@@ -130,7 +159,14 @@ def main():
         if not problem:
             continue
 
-        print("Analyzing:", problem)
+        print("Processing:", problem)
+
+        # CHECK DATABASE FIRST
+        if idea_exists(problem):
+            print("Skipped (already exists):", problem)
+            continue
+
+        print("Calling AI...")
 
         analysis = generate_startup_analysis(problem)
 
