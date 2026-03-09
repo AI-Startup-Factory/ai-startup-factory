@@ -19,14 +19,15 @@ def generate_ideas(posts):
         print("-", h)
 
     prompt = f"""
-You are a startup idea generator.
-
-From the following tech headlines, generate 5 startup ideas.
+Generate 5 startup ideas based on these tech headlines.
 
 Headlines:
 {headlines}
 
-Return concise ideas.
+Return ONLY the ideas.
+No explanations.
+No reasoning.
+Just a numbered list.
 """
 
     response = requests.post(
@@ -39,14 +40,17 @@ Return concise ideas.
             "model": "z-ai/glm-4.5-air:free",
             "messages": [
                 {"role": "user", "content": prompt}
-            ]
+            ],
+            "temperature": 0.7
         }
     )
 
     data = response.json()
 
-    print("\nFULL API RESPONSE:")
-    print(data)
+    if "choices" not in data:
+        print("\nAPI ERROR RESPONSE:")
+        print(data)
+        raise Exception("OpenRouter response missing 'choices'")
 
     ideas = data["choices"][0]["message"]["content"]
 
