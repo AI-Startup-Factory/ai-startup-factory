@@ -13,12 +13,19 @@ MODEL = "z-ai/glm-4.5-air:free"
 def check_env():
     if not SUPABASE_URL or not SUPABASE_KEY or not OPENROUTER_API_KEY:
         print("Missing environment variables")
+        print("SUPABASE_URL:", bool(SUPABASE_URL))
+        print("SUPABASE_KEY:", bool(SUPABASE_KEY))
+        print("OPENROUTER_API_KEY:", bool(OPENROUTER_API_KEY))
         sys.exit(1)
 
 
 def load_trends():
-    with open("data/trends.json") as f:
-        return json.load(f)
+    try:
+        with open("data/trends.json") as f:
+            return json.load(f)
+    except Exception as e:
+        print("Failed loading trends:", e)
+        sys.exit(1)
 
 
 def generate_startup_analysis(problem):
@@ -28,12 +35,12 @@ def generate_startup_analysis(problem):
     prompt = f"""
 You are a startup analyst.
 
-Analyze the following problem and propose a startup idea.
+Analyze the following problem and propose a startup opportunity.
 
 Problem:
 {problem}
 
-Return ONLY JSON:
+Return ONLY valid JSON:
 
 {{
 "solution": "...",
@@ -66,10 +73,15 @@ Return ONLY JSON:
 
     content = r.json()["choices"][0]["message"]["content"]
 
+    # Bersihkan markdown code block dari AI
+    content = content.replace("```json", "").replace("```", "").strip()
+
     try:
-        return json.loads(content)
-    except:
-        print("JSON parse error:", content)
+        data = json.loads(content)
+        return data
+    except Exception as e:
+        print("JSON parse error:", e)
+        print("RAW AI RESPONSE:", content)
         return None
 
 
@@ -79,12 +91,12 @@ def save_to_supabase(problem, analysis):
 
     payload = {
         "problem": problem,
-        "solution": analysis["solution"],
-        "market": analysis["market"],
-        "audience": analysis["audience"],
-        "revenue_model": analysis["revenue_model"],
-        "moat": analysis["moat"],
-        "score": analysis["score"]
+        "solution": analysis.get("solution"),
+        "market": analysis.get("market"),
+        "audience": analysis.get("audience"),
+        "revenue_model": analysis.get("revenue_model"),
+        "moat": analysis.get("moat"),
+        "score": int(float(analysis.get("score", 0)))
     }
 
     headers = {
@@ -96,10 +108,12 @@ def save_to_supabase(problem, analysis):
 
     r = requests.post(url, json=payload, headers=headers)
 
-    print("Inserted:", problem)
-    print("Status:", r.status_code)
-
-    if r.text:
+    if r.status_code == 201:
+        print("Inserted:", problem)
+    elif r.status_code == 409:
+        print("Duplicate skipped:", problem)
+    else:
+        print("Insert error:", r.status_code)
         print("Response:", r.text)
 
 
@@ -113,12 +127,17 @@ def main():
 
         problem = t.get("title")
 
+        if not problem:
+            continue
+
         print("Analyzing:", problem)
 
         analysis = generate_startup_analysis(problem)
 
         if analysis:
             save_to_supabase(problem, analysis)
+        else:
+            print("Skipping due to AI error")
 
 
 if __name__ == "__main__":
