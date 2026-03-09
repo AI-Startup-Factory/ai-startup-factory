@@ -37,7 +37,7 @@ Just a numbered list.
             "Content-Type": "application/json",
         },
         json={
-            "model": "google/gemma-3-27b-it:free",
+            "model": "google/gemma-3-12b-it:free",
             "messages": [
                 {"role": "user", "content": prompt}
             ],
