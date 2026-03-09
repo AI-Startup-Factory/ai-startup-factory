@@ -43,7 +43,10 @@ Return concise ideas.
 
     data = response.json()
 
-    ideas = data["choices"][0]["message"]["content"]
+print("\nFULL API RESPONSE:")
+print(data)
+
+ideas = data["choices"][0]["message"]["content"]
 
     return ideas
 
