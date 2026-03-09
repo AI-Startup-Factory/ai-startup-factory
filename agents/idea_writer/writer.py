@@ -13,23 +13,16 @@ MODEL = "google/gemma-3-12b-it:free"
 def check_env():
     if not SUPABASE_URL or not SUPABASE_KEY or not OPENROUTER_API_KEY:
         print("Missing environment variables")
-        print("SUPABASE_URL:", bool(SUPABASE_URL))
-        print("SUPABASE_KEY:", bool(SUPABASE_KEY))
-        print("OPENROUTER_API_KEY:", bool(OPENROUTER_API_KEY))
         sys.exit(1)
 
 
 def load_trends():
-    try:
-        with open("data/trends.json") as f:
-            return json.load(f)
-    except Exception as e:
-        print("Failed loading trends:", e)
-        sys.exit(1)
+    with open("data/trends.json") as f:
+        return json.load(f)
 
 
 # ===============================
-# CHECK DUPLICATE BEFORE AI CALL
+# CHECK IF IDEA EXISTS
 # ===============================
 def idea_exists(problem):
 
@@ -43,7 +36,6 @@ def idea_exists(problem):
     r = requests.get(url, headers=headers)
 
     if r.status_code != 200:
-        print("Supabase check error:", r.text)
         return False
 
     data = r.json()
@@ -52,30 +44,37 @@ def idea_exists(problem):
 
 
 # ===============================
-# CALL AI (OPENROUTER)
+# BATCH AI CALL
 # ===============================
-def generate_startup_analysis(problem):
+def generate_batch_analysis(problems):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
+
+    joined = "\n".join([f"{i+1}. {p}" for i, p in enumerate(problems)])
 
     prompt = f"""
 You are a startup analyst.
 
-Analyze the following problem and propose a startup opportunity.
+Analyze the following list of problems and propose startup opportunities.
 
-Problem:
-{problem}
+Problems:
+{joined}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON array.
 
-{{
-"solution": "...",
-"market": "...",
-"audience": "...",
-"revenue_model": "...",
-"moat": "...",
-"score": number
-}}
+Example format:
+
+[
+ {{
+  "problem": "...",
+  "solution": "...",
+  "market": "...",
+  "audience": "...",
+  "revenue_model": "...",
+  "moat": "...",
+  "score": number
+ }}
+]
 """
 
     headers = {
@@ -99,32 +98,31 @@ Return ONLY valid JSON:
 
     content = r.json()["choices"][0]["message"]["content"]
 
-    # Remove markdown formatting
     content = content.replace("```json", "").replace("```", "").strip()
 
     try:
         return json.loads(content)
     except Exception as e:
         print("JSON parse error:", e)
-        print("RAW AI RESPONSE:", content)
+        print(content)
         return None
 
 
 # ===============================
 # INSERT INTO SUPABASE
 # ===============================
-def save_to_supabase(problem, analysis):
+def save_to_supabase(item):
 
     url = f"{SUPABASE_URL}/rest/v1/ideas"
 
     payload = {
-        "problem": problem,
-        "solution": analysis.get("solution"),
-        "market": analysis.get("market"),
-        "audience": analysis.get("audience"),
-        "revenue_model": analysis.get("revenue_model"),
-        "moat": analysis.get("moat"),
-        "score": int(float(analysis.get("score", 0)))
+        "problem": item.get("problem"),
+        "solution": item.get("solution"),
+        "market": item.get("market"),
+        "audience": item.get("audience"),
+        "revenue_model": item.get("revenue_model"),
+        "moat": item.get("moat"),
+        "score": int(float(item.get("score", 0)))
     }
 
     headers = {
@@ -137,20 +135,22 @@ def save_to_supabase(problem, analysis):
     r = requests.post(url, json=payload, headers=headers)
 
     if r.status_code == 201:
-        print("Inserted:", problem)
+        print("Inserted:", payload["problem"])
     else:
         print("Insert error:", r.status_code)
-        print("Response:", r.text)
+        print(r.text)
 
 
 # ===============================
-# MAIN PIPELINE
+# MAIN
 # ===============================
 def main():
 
     check_env()
 
     trends = load_trends()
+
+    problems = []
 
     for t in trends[:5]:
 
@@ -159,21 +159,27 @@ def main():
         if not problem:
             continue
 
-        print("Processing:", problem)
-
-        # CHECK DATABASE FIRST
         if idea_exists(problem):
             print("Skipped (already exists):", problem)
             continue
 
-        print("Calling AI...")
+        problems.append(problem)
 
-        analysis = generate_startup_analysis(problem)
+    if len(problems) == 0:
+        print("No new ideas to analyze")
+        return
 
-        if analysis:
-            save_to_supabase(problem, analysis)
-        else:
-            print("Skipping due to AI error")
+    print("Calling AI for", len(problems), "problems")
+
+    results = generate_batch_analysis(problems)
+
+    if not results:
+        print("AI failed")
+        return
+
+    for item in results:
+
+        save_to_supabase(item)
 
 
 if __name__ == "__main__":
