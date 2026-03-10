@@ -1,53 +1,100 @@
 import os
 import requests
 import time
+import re
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-# =============================
+HN_API = "https://hn.algolia.com/api/v1/search"
+GITHUB_API = "https://api.github.com/search/repositories"
+
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}"
+}
+
+REQUEST_TIMEOUT = 30
+
+
+# ==========================
 # LOAD IDEAS
-# =============================
+# ==========================
 
 def load_ideas():
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem"
 
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-
-    r = requests.get(url, headers=headers)
+    r = requests.get(url, headers=HEADERS)
 
     if r.status_code != 200:
+
+        print("Failed loading ideas")
+
         return []
 
     return r.json()
 
 
-# =============================
-# SEARCH HACKERNEWS
-# =============================
+# ==========================
+# KEYWORD EXTRACTION
+# ==========================
+
+def extract_keywords(text):
+
+    text = text.lower()
+
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+
+    words = text.split()
+
+    stopwords = [
+        "the","and","for","with","that","this",
+        "from","into","using","build","system",
+        "platform","software"
+    ]
+
+    keywords = []
+
+    for w in words:
+
+        if len(w) < 4:
+            continue
+
+        if w in stopwords:
+            continue
+
+        keywords.append(w)
+
+    return " ".join(keywords[:5])
+
+
+# ==========================
+# HACKERNEWS MOMENTUM
+# ==========================
 
 def hn_score(query):
 
     try:
 
-        url = f"https://hn.algolia.com/api/v1/search?query={query}"
+        params = {
+            "query": query,
+            "tags": "story",
+            "hitsPerPage": 10
+        }
 
-        r = requests.get(url)
+        r = requests.get(HN_API, params=params, timeout=REQUEST_TIMEOUT)
 
         data = r.json()
 
-        hits = data["hits"]
+        hits = data.get("hits", [])
 
         score = 0
 
-        for h in hits[:5]:
+        for h in hits:
 
-            points = h.get("points",0)
-            comments = h.get("num_comments",0)
+            points = h.get("points", 0)
+            comments = h.get("num_comments", 0)
 
             score += points + comments
 
@@ -58,28 +105,33 @@ def hn_score(query):
         return 0
 
 
-# =============================
-# SEARCH GITHUB
-# =============================
+# ==========================
+# GITHUB MOMENTUM
+# ==========================
 
 def github_score(query):
 
     try:
 
-        url = f"https://api.github.com/search/repositories?q={query}&sort=stars"
+        params = {
+            "q": query,
+            "sort": "stars",
+            "order": "desc",
+            "per_page": 5
+        }
 
-        r = requests.get(url)
+        r = requests.get(GITHUB_API, params=params, timeout=REQUEST_TIMEOUT)
 
         data = r.json()
 
-        items = data.get("items",[])
+        repos = data.get("items", [])
 
         score = 0
 
-        for repo in items[:3]:
+        for repo in repos:
 
-            stars = repo.get("stargazers_count",0)
-            forks = repo.get("forks_count",0)
+            stars = repo.get("stargazers_count", 0)
+            forks = repo.get("forks_count", 0)
 
             score += stars + forks
 
@@ -90,89 +142,127 @@ def github_score(query):
         return 0
 
 
-# =============================
-# NORMALIZE SCORE
-# =============================
+# ==========================
+# MOMENTUM CALCULATION
+# ==========================
 
-def normalize(value):
+def calculate_momentum(hn, gh):
 
-    if value > 5000:
+    momentum = (hn * 1.2) + (gh * 0.8)
+
+    return int(momentum)
+
+
+# ==========================
+# NORMALIZE VELOCITY
+# ==========================
+
+def normalize_velocity(momentum):
+
+    if momentum > 10000:
         return 10
 
-    if value > 2000:
+    if momentum > 5000:
         return 9
 
-    if value > 1000:
+    if momentum > 2000:
         return 8
 
-    if value > 500:
+    if momentum > 1000:
         return 7
 
-    if value > 200:
+    if momentum > 500:
         return 6
 
-    if value > 100:
+    if momentum > 200:
         return 5
 
-    if value > 50:
+    if momentum > 100:
         return 4
 
-    if value > 20:
+    if momentum > 50:
         return 3
 
-    if value > 10:
+    if momentum > 20:
         return 2
 
     return 1
 
 
-# =============================
-# UPDATE SUPABASE
-# =============================
+# ==========================
+# UPDATE DATABASE
+# ==========================
 
-def update_trend(idea_id,trend):
+def update_db(idea_id, hn, gh, momentum, velocity):
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
 
     payload = {
-        "trend_strength": trend
+        "hn_score": hn,
+        "github_score": gh,
+        "momentum_score": momentum,
+        "trend_velocity": velocity
     }
 
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":"application/json"
+        "Content-Type": "application/json"
     }
 
-    requests.patch(url,json=payload,headers=headers)
+    r = requests.patch(url, json=payload, headers=headers)
+
+    print("Updated:", idea_id, r.status_code)
 
 
-# =============================
+# ==========================
 # MAIN
-# =============================
+# ==========================
 
 def main():
 
     ideas = load_ideas()
 
+    if not ideas:
+
+        print("No ideas found")
+
+        return
+
     for idea in ideas:
 
         problem = idea["problem"]
 
-        print("Analyzing momentum:",problem)
+        print("Analyzing:", problem)
 
-        hn = hn_score(problem)
+        keywords = extract_keywords(problem)
 
-        gh = github_score(problem)
+        print("Keywords:", keywords)
 
-        raw_score = hn + gh
+        hn = hn_score(keywords)
 
-        trend = normalize(raw_score)
+        gh = github_score(keywords)
 
-        update_trend(idea["id"],trend)
+        momentum = calculate_momentum(hn, gh)
+
+        velocity = normalize_velocity(momentum)
+
+        print("HN:", hn)
+        print("GitHub:", gh)
+        print("Momentum:", momentum)
+        print("Velocity:", velocity)
+
+        update_db(
+            idea["id"],
+            hn,
+            gh,
+            momentum,
+            velocity
+        )
 
         time.sleep(1)
 
 
 if __name__ == "__main__":
+
     main()
