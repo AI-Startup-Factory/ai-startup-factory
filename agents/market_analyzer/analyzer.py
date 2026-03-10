@@ -14,13 +14,13 @@ MODEL_LIST = [
 ]
 
 
-# ==============================
-# LOAD IDEAS FROM SUPABASE
-# ==============================
+# ===============================
+# LOAD IDEAS
+# ===============================
 
 def load_ideas():
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?market_size=is.null&select=*"
+    url = f"{SUPABASE_URL}/rest/v1/ideas?trend_strength=is.null&select=*"
 
     headers = {
         "apikey": SUPABASE_KEY,
@@ -32,31 +32,35 @@ def load_ideas():
     return r.json()
 
 
-# ==============================
-# CALL AI
-# ==============================
+# ===============================
+# CALL AI (BATCH MODE)
+# ===============================
 
-def analyze_market(problem, solution):
+def analyze_batch(ideas):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
+    problems = []
+
+    for idea in ideas:
+        problems.append(idea["problem"])
+
     prompt = f"""
-Analyze this startup idea.
+Analyze the following startup problems.
 
-Problem:
-{problem}
+Return JSON array.
 
-Solution:
-{solution}
+Each item must contain:
 
-Return JSON:
+problem
+market_size
+competition
+trend_strength (1-10)
+success_probability (1-10)
 
-{{
-"market_size": "...",
-"competition": "...",
-"trend_strength": number 1-10,
-"success_probability": number 1-10
-}}
+Problems:
+
+{json.dumps(problems, indent=2)}
 """
 
     headers = {
@@ -77,7 +81,7 @@ Return JSON:
 
         try:
 
-            r = requests.post(url,headers=headers,json=payload,timeout=90)
+            r = requests.post(url,headers=headers,json=payload,timeout=120)
 
             if r.status_code != 200:
                 continue
@@ -90,19 +94,20 @@ Return JSON:
 
             return json.loads(content)
 
-        except:
-            continue
+        except Exception as e:
+
+            print("Model failed:",model,e)
 
     return None
 
 
-# ==============================
+# ===============================
 # UPDATE DATABASE
-# ==============================
+# ===============================
 
-def update_idea(id,analysis):
+def update_idea(problem,analysis):
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{id}"
+    url = f"{SUPABASE_URL}/rest/v1/ideas?problem=eq.{problem}"
 
     payload = {
         "market_size":analysis["market_size"],
@@ -114,17 +119,17 @@ def update_idea(id,analysis):
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type":"application/json"
     }
 
     r = requests.patch(url,json=payload,headers=headers)
 
-    print("Updated:",id,r.status_code)
+    print("Updated:",problem,r.status_code)
 
 
-# ==============================
+# ===============================
 # MAIN
-# ==============================
+# ===============================
 
 def main():
 
@@ -134,23 +139,22 @@ def main():
         print("No ideas to analyze")
         return
 
-    for idea in ideas[:5]:
+    batch = ideas[:10]
 
-        print("Analyzing:",idea["problem"])
+    print("Analyzing batch of",len(batch),"ideas")
 
-        analysis = analyze_market(
-            idea["problem"],
-            idea["solution"]
-        )
+    analysis_results = analyze_batch(batch)
 
-        if analysis:
+    if not analysis_results:
+        print("AI failed")
+        return
 
-            update_idea(
-                idea["id"],
-                analysis
-            )
+    for item in analysis_results:
+
+        problem = item["problem"]
+
+        update_idea(problem,item)
 
 
 if __name__ == "__main__":
-
     main()
