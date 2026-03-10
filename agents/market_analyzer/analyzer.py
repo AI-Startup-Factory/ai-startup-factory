@@ -1,10 +1,14 @@
 import os
 import json
 import requests
+import re
+import time
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+BATCH_SIZE = 10
 
 MODEL_LIST = [
 "stepfun/step-3.5-flash:free",
@@ -13,14 +17,32 @@ MODEL_LIST = [
 "nvidia/nemotron-3-nano-30b-a3b:free"
 ]
 
+# =========================
+# JSON EXTRACTOR
+# =========================
 
-# ===============================
-# LOAD IDEAS
-# ===============================
+def extract_json(text):
+
+    try:
+
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+
+        if match:
+            return json.loads(match.group())
+
+    except Exception as e:
+        print("JSON extraction error:", e)
+
+    return None
+
+
+# =========================
+# LOAD IDEAS FROM SUPABASE
+# =========================
 
 def load_ideas():
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?trend_strength=is.null&select=*"
+    url = f"{SUPABASE_URL}/rest/v1/ideas?trend_strength=is.null&select=id,problem"
 
     headers = {
         "apikey": SUPABASE_KEY,
@@ -29,26 +51,140 @@ def load_ideas():
 
     r = requests.get(url, headers=headers)
 
+    if r.status_code != 200:
+        print("Failed to fetch ideas:", r.text)
+        return []
+
     return r.json()
 
 
-# ===============================
-# CALL AI (BATCH MODE)
-# ===============================
+# =========================
+# DISCOVER FREE MODELS
+# =========================
 
-def analyze_batch(ideas):
+def discover_models():
+
+    print("Checking OpenRouter free models")
+
+    try:
+
+        r = requests.get("https://openrouter.ai/api/v1/models")
+
+        data = r.json()
+
+        models = []
+
+        for m in data["data"]:
+
+            if ":free" in m["id"]:
+
+                if m["id"] not in MODEL_LIST:
+                    models.append(m["id"])
+
+        return models
+
+    except:
+        return []
+
+
+# =========================
+# CALL AI
+# =========================
+
+def call_ai(prompt):
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
-    problems = []
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    for idea in ideas:
-        problems.append(idea["problem"])
+    models = MODEL_LIST + discover_models()
+
+    for model in models:
+
+        print("Trying model:", model)
+
+        payload = {
+            "model": model,
+            "messages":[
+                {"role":"user","content":prompt}
+            ]
+        }
+
+        try:
+
+            r = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=120
+            )
+
+            if r.status_code != 200:
+                print("Model error:", r.status_code)
+                continue
+
+            data = r.json()
+
+            content = data["choices"][0]["message"]["content"]
+
+            content = content.replace("```json","").replace("```","").strip()
+
+            parsed = extract_json(content)
+
+            if parsed:
+                print("AI success with:", model)
+                return parsed
+
+        except Exception as e:
+
+            print("Model failed:", model, e)
+
+        time.sleep(2)
+
+    return None
+
+
+# =========================
+# UPDATE SUPABASE
+# =========================
+
+def update_idea(idea_id, analysis):
+
+    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
+
+    payload = {
+        "market_size": analysis.get("market_size"),
+        "competition": analysis.get("competition"),
+        "trend_strength": analysis.get("trend_strength"),
+        "success_probability": analysis.get("success_probability")
+    }
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    r = requests.patch(url, json=payload, headers=headers)
+
+    print("Updated:", idea_id, r.status_code)
+
+
+# =========================
+# BUILD PROMPT
+# =========================
+
+def build_prompt(ideas):
+
+    problems = [idea["problem"] for idea in ideas]
 
     prompt = f"""
 Analyze the following startup problems.
 
-Return JSON array.
+Return ONLY JSON array.
 
 Each item must contain:
 
@@ -63,73 +199,12 @@ Problems:
 {json.dumps(problems, indent=2)}
 """
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    for model in MODEL_LIST:
-
-        print("Trying model:", model)
-
-        payload = {
-            "model": model,
-            "messages":[
-                {"role":"user","content":prompt}
-            ]
-        }
-
-        try:
-
-            r = requests.post(url,headers=headers,json=payload,timeout=120)
-
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-
-            content = data["choices"][0]["message"]["content"]
-
-            content = content.replace("```json","").replace("```","").strip()
-
-            return json.loads(content)
-
-        except Exception as e:
-
-            print("Model failed:",model,e)
-
-    return None
+    return prompt
 
 
-# ===============================
-# UPDATE DATABASE
-# ===============================
-
-def update_idea(problem,analysis):
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?problem=eq.{problem}"
-
-    payload = {
-        "market_size":analysis["market_size"],
-        "competition":analysis["competition"],
-        "trend_strength":analysis["trend_strength"],
-        "success_probability":analysis["success_probability"]
-    }
-
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":"application/json"
-    }
-
-    r = requests.patch(url,json=payload,headers=headers)
-
-    print("Updated:",problem,r.status_code)
-
-
-# ===============================
+# =========================
 # MAIN
-# ===============================
+# =========================
 
 def main():
 
@@ -139,21 +214,30 @@ def main():
         print("No ideas to analyze")
         return
 
-    batch = ideas[:10]
+    batch = ideas[:BATCH_SIZE]
 
-    print("Analyzing batch of",len(batch),"ideas")
+    print("Analyzing batch:", len(batch))
 
-    analysis_results = analyze_batch(batch)
+    prompt = build_prompt(batch)
 
-    if not analysis_results:
-        print("AI failed")
+    results = call_ai(prompt)
+
+    if not results:
+        print("AI analysis failed")
         return
 
-    for item in analysis_results:
+    problem_map = {idea["problem"]:idea["id"] for idea in batch}
 
-        problem = item["problem"]
+    for item in results:
 
-        update_idea(problem,item)
+        problem = item.get("problem")
+
+        if problem not in problem_map:
+            continue
+
+        idea_id = problem_map[problem]
+
+        update_idea(idea_id, item)
 
 
 if __name__ == "__main__":
