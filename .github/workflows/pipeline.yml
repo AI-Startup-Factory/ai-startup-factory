@@ -21,7 +21,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify installation
+        run: |
+          pip list | grep sentence
 
       - name: Run Trend Scanner
         run: |
