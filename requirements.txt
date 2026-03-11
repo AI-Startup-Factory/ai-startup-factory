@@ -2,5 +2,5 @@ openai
 requests
 beautifulsoup4
 pandas
-sentence-transformers
-torch
+sentence-transformers==2.7.0
+torch==2.2.2
