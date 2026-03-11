@@ -1,6 +1,7 @@
 import os
-import requests
 import json
+import requests
+from sentence_transformers import SentenceTransformer
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
@@ -17,25 +18,30 @@ headers = {
 }
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-EMBEDDING_URL = "https://openrouter.ai/api/v1/embeddings"
 
 AI_HEADERS = {
     "Authorization": f"Bearer {OPENROUTER_KEY}",
     "Content-Type": "application/json"
 }
 
+# fallback model list
 MODELS = [
-"stepfun/step-3.5-flash:free",
-"arcee-ai/trinity-large-preview:free",
-"z-ai/glm-4.5-air:free",
-"nvidia/nemotron-3-nano-30b-a3b:free",
-"arcee-ai/trinity-mini:free",
-"nvidia/nemotron-nano-9b-v2:free",
-"openai/gpt-oss-120b:free",
-"meta-llama/llama-3.3-70b-instruct:free",
-"qwen/qwen3-next-80b-a3b-instruct:free",
-"google/gemma-3-27b-it:free"
+    "stepfun/step-3.5-flash:free",
+    "arcee-ai/trinity-large-preview:free",
+    "z-ai/glm-4.5-air:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "arcee-ai/trinity-mini:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-3-27b-it:free"
 ]
+
+# -----------------------------
+# LOAD LOCAL EMBEDDING MODEL
+# -----------------------------
+print("Loading embedding model...")
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # -----------------------------
@@ -47,11 +53,15 @@ def fetch_problems():
 
     r = requests.get(url, headers=headers)
 
+    if r.status_code != 200:
+        print("Fetch error:", r.text)
+        return []
+
     return r.json()
 
 
 # -----------------------------
-# AI CALL WITH FALLBACK
+# AI CALL WITH MODEL FALLBACK
 # -----------------------------
 def call_ai(prompt):
 
@@ -82,6 +92,8 @@ def call_ai(prompt):
             except:
                 pass
 
+        print("Model failed:", model)
+
     print("All models failed")
     return None
 
@@ -91,39 +103,37 @@ def call_ai(prompt):
 # -----------------------------
 def embed(text):
 
-    payload = {
-        "model": "text-embedding-3-small",
-        "input": text
-    }
+    vector = embedding_model.encode(text)
 
-    r = requests.post(EMBEDDING_URL, headers=AI_HEADERS, json=payload)
+    return vector.tolist()
 
-    if r.status_code != 200:
-        return None
 
-    data = r.json()
+# -----------------------------
+# FORMAT VECTOR FOR SUPABASE
+# -----------------------------
+def format_vector(v):
 
-    return data["data"][0]["embedding"]
+    return "[" + ",".join(str(x) for x in v) + "]"
 
 
 # -----------------------------
 # CHECK SEMANTIC DUPLICATE
 # -----------------------------
-def is_duplicate(embedding):
+def is_duplicate(vector):
 
-    vector = str(embedding)
+    vector_str = format_vector(vector)
 
-    query = f"""
-    SELECT problem_embedding <=> '{vector}'::vector AS distance
+    sql = f"""
+    SELECT problem_embedding <=> '{vector_str}'::vector AS distance
     FROM ideas
     WHERE problem_embedding IS NOT NULL
-    ORDER BY problem_embedding <=> '{vector}'::vector
+    ORDER BY problem_embedding <=> '{vector_str}'::vector
     LIMIT 1
     """
 
     url = f"{SUPABASE_URL}/rest/v1/rpc/sql"
 
-    r = requests.post(url, headers=headers, json={"query": query})
+    r = requests.post(url, headers=headers, json={"query": sql})
 
     if r.status_code != 200:
         return False
@@ -136,34 +146,38 @@ def is_duplicate(embedding):
     distance = data[0]["distance"]
 
     if distance < 0.1:
-        print("Duplicate detected (distance:", distance, ")")
+        print("Duplicate detected distance:", distance)
         return True
 
     return False
 
 
 # -----------------------------
-# INSERT IDEA
+# UPDATE IDEA RECORD
 # -----------------------------
-def insert_idea(idea_id, solution, embedding):
+def update_idea(idea_id, data, embedding):
 
     payload = {
-        "solution": solution,
-        "problem_embedding": embedding
+        "solution": data.get("solution"),
+        "market": data.get("market"),
+        "audience": data.get("audience"),
+        "revenue_model": data.get("revenue_model"),
+        "moat": data.get("moat"),
+        "problem_embedding": format_vector(embedding)
     }
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
 
     r = requests.patch(url, headers=headers, json=payload)
 
-    if r.status_code in [200,204]:
-        print("Inserted:", idea_id)
+    if r.status_code in [200, 204]:
+        print("Updated:", idea_id)
     else:
-        print("Insert failed:", r.text)
+        print("Update failed:", r.text)
 
 
 # -----------------------------
-# MAIN
+# MAIN PIPELINE
 # -----------------------------
 def main():
 
@@ -176,9 +190,11 @@ def main():
     batch = [p["problem"] for p in problems]
 
     prompt = f"""
-Generate startup solutions for these problems.
+Generate startup solutions for the following problems.
 
-Return JSON list with:
+Return ONLY JSON array.
+
+Each item must contain:
 problem
 solution
 market
@@ -203,23 +219,20 @@ Problems:
         print("AI JSON parse error")
         return
 
-    for item in ideas:
+    for idea in ideas:
 
-        problem = item["problem"]
-        solution = item["solution"]
+        problem = idea["problem"]
 
         embedding = embed(problem)
 
-        if embedding is None:
-            continue
-
         if is_duplicate(embedding):
+            print("Skipped duplicate:", problem)
             continue
 
         for p in problems:
             if p["problem"] == problem:
 
-                insert_idea(p["id"], solution, embedding)
+                update_idea(p["id"], idea, embedding)
 
 
 if __name__ == "__main__":
