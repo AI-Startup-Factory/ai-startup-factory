@@ -54,6 +54,13 @@ jobs:
         run: |
           python agents/idea_clusterer/clusterer.py
 
+      - name: Run Opportunity Gap Detector
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python agents/opportunity_gap_detector/gap_detector.py
+
       - name: Run Market Analyzer
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
