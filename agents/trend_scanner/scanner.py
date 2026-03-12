@@ -1,46 +1,98 @@
-import requests
-import json
 import os
+import importlib
+import requests
+from pathlib import Path
 
-def fetch_hn():
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
 
-    url = "https://hacker-news.firebaseio.com/v0/topstories.json"
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Missing Supabase environment variables")
+    exit(1)
 
-    story_ids = requests.get(url).json()[:10]
-
-    posts = []
-
-    for sid in story_ids:
-
-        item_url = f"https://hacker-news.firebaseio.com/v0/item/{sid}.json"
-        item = requests.get(item_url).json()
-
-        if item and "title" in item:
-            posts.append({
-                "title": item["title"],
-                "url": item.get("url", "")
-            })
-
-    return posts
+headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
 
 
-def save_posts(posts):
+# -----------------------------------
+# SAVE SIGNAL
+# -----------------------------------
+def save_signal(signal):
 
-    os.makedirs("data", exist_ok=True)
+    r = requests.post(
+        f"{SUPABASE_URL}/rest/v1/signals",
+        headers=headers,
+        json=signal
+    )
 
-    with open("data/trends.json", "w") as f:
-        json.dump(posts, f, indent=2)
+    if r.status_code not in [200, 201]:
+        print("Insert failed:", r.text)
+
+
+# -----------------------------------
+# LOAD SOURCE MODULES
+# -----------------------------------
+def load_sources():
+
+    source_dir = Path("agents/data_sources")
+
+    modules = []
+
+    for file in source_dir.glob("*.py"):
+
+        name = file.stem
+
+        module = importlib.import_module(
+            f"agents.data_sources.{name}"
+        )
+
+        modules.append(module)
+
+    return modules
+
+
+# -----------------------------------
+# RUN SCANNERS
+# -----------------------------------
+def run_sources():
+
+    modules = load_sources()
+
+    print(f"Loaded {len(modules)} data sources\n")
+
+    for m in modules:
+
+        try:
+
+            print(f"Running source: {m.__name__}")
+
+            signals = m.fetch()
+
+            for s in signals:
+                save_signal(s)
+
+            print(f"Collected {len(signals)} signals\n")
+
+        except Exception as e:
+
+            print("Source failed:", m.__name__)
+            print(e)
+
+
+# -----------------------------------
+# MAIN
+# -----------------------------------
+def main():
+
+    print("Starting Trend Scanner\n")
+
+    run_sources()
+
+    print("Trend scanning complete")
 
 
 if __name__ == "__main__":
-
-    posts = fetch_hn()
-
-    print("Fetched HackerNews posts:")
-
-    for p in posts:
-        print("-", p["title"])
-
-    save_posts(posts)
-
-    print("\nSaved to data/trends.json")
+    main()
