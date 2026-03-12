@@ -40,9 +40,12 @@ print("Loading embedding model...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def fetch_problems():
+# ------------------------------------------------
+# FETCH IDEAS WITHOUT EMBEDDING
+# ------------------------------------------------
+def fetch_ideas():
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem&solution=is.null&limit=20"
+    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem,solution,market,audience,revenue_model,moat&problem_embedding=is.null&limit=20"
 
     r = requests.get(url, headers=headers)
 
@@ -52,11 +55,14 @@ def fetch_problems():
 
     data = r.json()
 
-    print("Fetched problems:", len(data))
+    print("Fetched ideas needing embedding:", len(data))
 
     return data
 
 
+# ------------------------------------------------
+# AI CALL
+# ------------------------------------------------
 def call_ai(prompt):
 
     for model in MODELS:
@@ -89,6 +95,9 @@ def call_ai(prompt):
     return None
 
 
+# ------------------------------------------------
+# CLEAN JSON FROM LLM
+# ------------------------------------------------
 def clean_json(text):
 
     text = text.replace("```json", "")
@@ -98,6 +107,9 @@ def clean_json(text):
     return text
 
 
+# ------------------------------------------------
+# GENERATE EMBEDDING
+# ------------------------------------------------
 def embed_batch(texts):
 
     print("Generating embeddings...")
@@ -112,11 +124,17 @@ def embed_batch(texts):
     return result
 
 
+# ------------------------------------------------
+# FORMAT VECTOR FOR PGVECTOR
+# ------------------------------------------------
 def vector_to_pg(v):
 
     return "[" + ",".join(str(x) for x in v) + "]"
 
 
+# ------------------------------------------------
+# UPDATE IDEA
+# ------------------------------------------------
 def update_idea(idea_id, data, embedding):
 
     payload = {
@@ -138,17 +156,20 @@ def update_idea(idea_id, data, embedding):
         print("Update failed:", r.text)
 
 
+# ------------------------------------------------
+# MAIN PIPELINE
+# ------------------------------------------------
 def main():
 
-    problems = fetch_problems()
+    ideas = fetch_ideas()
 
-    if not problems:
-        print("No problems found")
+    if not ideas:
+        print("No ideas found")
         return
 
-    problem_texts = [p["problem"] for p in problems]
+    problems = [i["problem"] for i in ideas]
 
-    problem_map = {p["problem"]: p["id"] for p in problems}
+    idea_map = {i["problem"]: i for i in ideas}
 
     prompt = f"""
 Generate startup solutions for the following problems.
@@ -164,7 +185,7 @@ revenue_model
 moat
 
 Problems:
-{json.dumps(problem_texts)}
+{json.dumps(problems)}
 """
 
     result = call_ai(prompt)
@@ -175,25 +196,43 @@ Problems:
     result = clean_json(result)
 
     try:
-        ideas = json.loads(result)
+        generated = json.loads(result)
     except Exception as e:
         print("JSON parse error:", e)
         print(result)
         return
 
-    idea_problems = [idea["problem"] for idea in ideas]
+    generated_problems = [g["problem"] for g in generated]
 
-    embeddings = embed_batch(idea_problems)
+    embeddings = embed_batch(generated_problems)
 
-    for idea, embedding in zip(ideas, embeddings):
+    for idea, embedding in zip(generated, embeddings):
 
         problem = idea["problem"]
 
-        if problem not in problem_map:
+        if problem not in idea_map:
             print("Problem mismatch:", problem)
             continue
 
-        idea_id = problem_map[problem]
+        original = idea_map[problem]
+
+        idea_id = original["id"]
+
+        # gunakan data lama jika AI tidak memberi
+        if not idea.get("solution"):
+            idea["solution"] = original.get("solution")
+
+        if not idea.get("market"):
+            idea["market"] = original.get("market")
+
+        if not idea.get("audience"):
+            idea["audience"] = original.get("audience")
+
+        if not idea.get("revenue_model"):
+            idea["revenue_model"] = original.get("revenue_model")
+
+        if not idea.get("moat"):
+            idea["moat"] = original.get("moat")
 
         update_idea(idea_id, idea, embedding)
 
