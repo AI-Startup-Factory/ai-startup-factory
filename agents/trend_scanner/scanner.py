@@ -1,12 +1,24 @@
 import os
+import sys
 import importlib
 import requests
 from pathlib import Path
 
 
+# -------------------------------------------------
+# FIX PYTHONPATH (IMPORTANT FOR GITHUB ACTIONS)
+# -------------------------------------------------
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT_DIR))
+
+
+# -------------------------------------------------
+# ENV
+# -------------------------------------------------
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
-
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -14,6 +26,10 @@ headers = {
     "Content-Type": "application/json"
 }
 
+
+# -------------------------------------------------
+# SAVE SIGNAL
+# -------------------------------------------------
 
 def save_signal(signal):
 
@@ -27,11 +43,15 @@ def save_signal(signal):
         print("Insert failed:", r.text)
 
 
+# -------------------------------------------------
+# LOAD DATA SOURCES
+# -------------------------------------------------
+
 def load_sources():
 
     modules = []
 
-    source_dir = Path(__file__).resolve().parents[1] / "data_sources"
+    source_dir = ROOT_DIR / "agents" / "data_sources"
 
     for file in source_dir.glob("*.py"):
 
@@ -40,20 +60,33 @@ def load_sources():
 
         module_name = file.stem
 
-        module = importlib.import_module(
-            f"agents.data_sources.{module_name}"
-        )
+        try:
 
-        modules.append(module)
+            module = importlib.import_module(
+                f"agents.data_sources.{module_name}"
+            )
+
+            modules.append(module)
+
+        except Exception as e:
+
+            print("Failed loading source:", module_name)
+            print(e)
 
     return modules
 
+
+# -------------------------------------------------
+# RUN SOURCES
+# -------------------------------------------------
 
 def run_sources():
 
     modules = load_sources()
 
     print("Sources detected:", len(modules))
+
+    total = 0
 
     for m in modules:
 
@@ -64,13 +97,22 @@ def run_sources():
             print(m.__name__, "signals:", len(signals))
 
             for s in signals:
+
                 save_signal(s)
+
+                total += 1
 
         except Exception as e:
 
             print("Source failed:", m.__name__)
             print(e)
 
+    print("Total signals inserted:", total)
+
+
+# -------------------------------------------------
+# MAIN
+# -------------------------------------------------
 
 def main():
 
