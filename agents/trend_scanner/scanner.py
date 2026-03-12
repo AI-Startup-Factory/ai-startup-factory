@@ -29,7 +29,7 @@ def load_sources():
 
     modules = []
 
-    source_dir = Path("agents/data_sources")
+    source_dir = Path(__file__).resolve().parents[1] / "data_sources"
 
     for file in source_dir.glob("*.py"):
 
