@@ -3,8 +3,10 @@ import importlib
 import requests
 from pathlib import Path
 
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -21,8 +23,8 @@ def save_signal(signal):
         json=signal
     )
 
-    if r.status_code not in [200,201]:
-        print("Insert failed", r.text)
+    if r.status_code not in [200, 201]:
+        print("Insert failed:", r.text)
 
 
 def load_sources():
@@ -33,10 +35,13 @@ def load_sources():
 
     for file in source_dir.glob("*.py"):
 
-        name = file.stem
+        if file.name == "__init__.py":
+            continue
+
+        module_name = file.stem
 
         module = importlib.import_module(
-            f"agents.data_sources.{name}"
+            f"agents.data_sources.{module_name}"
         )
 
         modules.append(module)
