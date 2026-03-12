@@ -24,9 +24,6 @@ AI_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# -----------------------------
-# MODEL FALLBACK LIST
-# -----------------------------
 MODELS = [
     "stepfun/step-3.5-flash:free",
     "arcee-ai/trinity-large-preview:free",
@@ -39,16 +36,10 @@ MODELS = [
     "google/gemma-3-27b-it:free"
 ]
 
-# -----------------------------
-# LOAD EMBEDDING MODEL
-# -----------------------------
 print("Loading embedding model...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-# -----------------------------
-# FETCH PROBLEMS WITHOUT SOLUTION
-# -----------------------------
 def fetch_problems():
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem&solution=is.null&limit=20"
@@ -59,12 +50,13 @@ def fetch_problems():
         print("Fetch error:", r.text)
         return []
 
-    return r.json()
+    data = r.json()
+
+    print("Fetched problems:", len(data))
+
+    return data
 
 
-# -----------------------------
-# CALL AI WITH MODEL FALLBACK
-# -----------------------------
 def call_ai(prompt):
 
     for model in MODELS:
@@ -74,10 +66,7 @@ def call_ai(prompt):
         payload = {
             "model": model,
             "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "user", "content": prompt}
             ]
         }
 
@@ -94,15 +83,12 @@ def call_ai(prompt):
             except:
                 pass
 
-        print("Model failed:", model)
+        print("Model failed")
 
     print("All models failed")
     return None
 
 
-# -----------------------------
-# CLEAN LLM JSON RESPONSE
-# -----------------------------
 def clean_json(text):
 
     text = text.replace("```json", "")
@@ -112,19 +98,25 @@ def clean_json(text):
     return text
 
 
-# -----------------------------
-# GENERATE BATCH EMBEDDINGS
-# -----------------------------
 def embed_batch(texts):
+
+    print("Generating embeddings...")
 
     vectors = embedding_model.encode(texts)
 
-    return [v.tolist() for v in vectors]
+    result = []
+
+    for v in vectors:
+        result.append([float(x) for x in v])
+
+    return result
 
 
-# -----------------------------
-# UPDATE IDEA RECORD
-# -----------------------------
+def vector_to_pg(v):
+
+    return "[" + ",".join(str(x) for x in v) + "]"
+
+
 def update_idea(idea_id, data, embedding):
 
     payload = {
@@ -133,7 +125,7 @@ def update_idea(idea_id, data, embedding):
         "audience": data.get("audience"),
         "revenue_model": data.get("revenue_model"),
         "moat": data.get("moat"),
-        "problem_embedding": embedding
+        "problem_embedding": vector_to_pg(embedding)
     }
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
@@ -146,26 +138,22 @@ def update_idea(idea_id, data, embedding):
         print("Update failed:", r.text)
 
 
-# -----------------------------
-# MAIN PIPELINE
-# -----------------------------
 def main():
 
     problems = fetch_problems()
 
-    if len(problems) == 0:
-        print("No problems to process")
+    if not problems:
+        print("No problems found")
         return
 
     problem_texts = [p["problem"] for p in problems]
 
-    # mapping problem → id
     problem_map = {p["problem"]: p["id"] for p in problems}
 
     prompt = f"""
 Generate startup solutions for the following problems.
 
-Return ONLY a JSON array.
+Return ONLY JSON array.
 
 Each item must contain:
 problem
@@ -179,8 +167,6 @@ Problems:
 {json.dumps(problem_texts)}
 """
 
-    print("Calling AI for", len(problem_texts), "problems")
-
     result = call_ai(prompt)
 
     if not result:
@@ -191,12 +177,12 @@ Problems:
     try:
         ideas = json.loads(result)
     except Exception as e:
-        print("AI JSON parse error:", e)
+        print("JSON parse error:", e)
         print(result)
         return
 
-    # batch embedding
     idea_problems = [idea["problem"] for idea in ideas]
+
     embeddings = embed_batch(idea_problems)
 
     for idea, embedding in zip(ideas, embeddings):
@@ -204,7 +190,7 @@ Problems:
         problem = idea["problem"]
 
         if problem not in problem_map:
-            print("Problem not found in DB:", problem)
+            print("Problem mismatch:", problem)
             continue
 
         idea_id = problem_map[problem]
