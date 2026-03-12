@@ -24,7 +24,9 @@ AI_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# fallback model list
+# -----------------------------
+# MODEL FALLBACK LIST
+# -----------------------------
 MODELS = [
     "stepfun/step-3.5-flash:free",
     "arcee-ai/trinity-large-preview:free",
@@ -38,7 +40,7 @@ MODELS = [
 ]
 
 # -----------------------------
-# LOAD LOCAL EMBEDDING MODEL
+# LOAD EMBEDDING MODEL
 # -----------------------------
 print("Loading embedding model...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -61,7 +63,7 @@ def fetch_problems():
 
 
 # -----------------------------
-# AI CALL WITH MODEL FALLBACK
+# CALL AI WITH MODEL FALLBACK
 # -----------------------------
 def call_ai(prompt):
 
@@ -99,57 +101,25 @@ def call_ai(prompt):
 
 
 # -----------------------------
-# GENERATE EMBEDDING
+# CLEAN LLM JSON RESPONSE
 # -----------------------------
-def embed(text):
+def clean_json(text):
 
-    vector = embedding_model.encode(text)
+    text = text.replace("```json", "")
+    text = text.replace("```", "")
+    text = text.strip()
 
-    return vector.tolist()
-
-
-# -----------------------------
-# FORMAT VECTOR FOR SUPABASE
-# -----------------------------
-def format_vector(v):
-
-    return "[" + ",".join(str(x) for x in v) + "]"
+    return text
 
 
 # -----------------------------
-# CHECK SEMANTIC DUPLICATE
+# GENERATE BATCH EMBEDDINGS
 # -----------------------------
-def is_duplicate(vector):
+def embed_batch(texts):
 
-    vector_str = format_vector(vector)
+    vectors = embedding_model.encode(texts)
 
-    sql = f"""
-    SELECT problem_embedding <=> '{vector_str}'::vector AS distance
-    FROM ideas
-    WHERE problem_embedding IS NOT NULL
-    ORDER BY problem_embedding <=> '{vector_str}'::vector
-    LIMIT 1
-    """
-
-    url = f"{SUPABASE_URL}/rest/v1/rpc/sql"
-
-    r = requests.post(url, headers=headers, json={"query": sql})
-
-    if r.status_code != 200:
-        return False
-
-    data = r.json()
-
-    if len(data) == 0:
-        return False
-
-    distance = data[0]["distance"]
-
-    if distance < 0.1:
-        print("Duplicate detected distance:", distance)
-        return True
-
-    return False
+    return [v.tolist() for v in vectors]
 
 
 # -----------------------------
@@ -163,7 +133,7 @@ def update_idea(idea_id, data, embedding):
         "audience": data.get("audience"),
         "revenue_model": data.get("revenue_model"),
         "moat": data.get("moat"),
-        "problem_embedding": format_vector(embedding)
+        "problem_embedding": embedding
     }
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
@@ -171,7 +141,7 @@ def update_idea(idea_id, data, embedding):
     r = requests.patch(url, headers=headers, json=payload)
 
     if r.status_code in [200, 204]:
-        print("Updated:", idea_id)
+        print("Updated idea:", idea_id)
     else:
         print("Update failed:", r.text)
 
@@ -187,12 +157,15 @@ def main():
         print("No problems to process")
         return
 
-    batch = [p["problem"] for p in problems]
+    problem_texts = [p["problem"] for p in problems]
+
+    # mapping problem → id
+    problem_map = {p["problem"]: p["id"] for p in problems}
 
     prompt = f"""
 Generate startup solutions for the following problems.
 
-Return ONLY JSON array.
+Return ONLY a JSON array.
 
 Each item must contain:
 problem
@@ -203,36 +176,40 @@ revenue_model
 moat
 
 Problems:
-{json.dumps(batch)}
+{json.dumps(problem_texts)}
 """
 
-    print("Calling AI for", len(batch), "problems")
+    print("Calling AI for", len(problem_texts), "problems")
 
     result = call_ai(prompt)
 
     if not result:
         return
 
+    result = clean_json(result)
+
     try:
         ideas = json.loads(result)
-    except:
-        print("AI JSON parse error")
+    except Exception as e:
+        print("AI JSON parse error:", e)
+        print(result)
         return
 
-    for idea in ideas:
+    # batch embedding
+    idea_problems = [idea["problem"] for idea in ideas]
+    embeddings = embed_batch(idea_problems)
+
+    for idea, embedding in zip(ideas, embeddings):
 
         problem = idea["problem"]
 
-        embedding = embed(problem)
-
-        if is_duplicate(embedding):
-            print("Skipped duplicate:", problem)
+        if problem not in problem_map:
+            print("Problem not found in DB:", problem)
             continue
 
-        for p in problems:
-            if p["problem"] == problem:
+        idea_id = problem_map[problem]
 
-                update_idea(p["id"], idea, embedding)
+        update_idea(idea_id, idea, embedding)
 
 
 if __name__ == "__main__":
