@@ -7,10 +7,9 @@ on:
   schedule:
     - cron: "0 */6 * * *"
 
-
 jobs:
 
-  run-pipeline:
+  ai-startup-pipeline:
 
     runs-on: ubuntu-latest
 
@@ -34,40 +33,131 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
+          pip install -r requirements.txt
 
 
-      # -------------------------
-      # SCRAPER AGENT
-      # -------------------------
+      ################################################
+      # DATA SOURCE INGESTION
+      ################################################
 
-      - name: Run Scraper
-        run: |
-          python agents/scraper.py
+      - name: Collect HackerNews signals
+        run: python agents/data_sources/hackernews.py
+
+      - name: Collect Reddit ML signals
+        run: python agents/data_sources/reddit_ml.py
+
+      - name: Collect Reddit SaaS signals
+        run: python agents/data_sources/reddit_saas.py
+
+      - name: Collect Reddit Startup signals
+        run: python agents/data_sources/reddit_startups.py
+
+      - name: Collect GitHub Trending
+        run: python agents/data_sources/github_trending.py
+
+      - name: Collect GitHub Issues
+        run: python agents/data_sources/github_issues.py
+
+      - name: Collect ProductHunt signals
+        run: python agents/data_sources/producthunt.py
+
+      - name: Collect StackOverflow signals
+        run: python agents/data_sources/stackoverflow.py
+
+      - name: Collect TechCrunch signals
+        run: python agents/data_sources/techcrunch.py
+
+      - name: Collect Dev.to signals
+        run: python agents/data_sources/devto.py
+
+      - name: Collect IndieHackers signals
+        run: python agents/data_sources/indiehackers.py
+
+      - name: Collect YC Requests
+        run: python agents/data_sources/yc_requests.py
+
+      - name: Collect ArXiv AI signals
+        run: python agents/data_sources/arxiv_ai.py
+
+      - name: Collect ArXiv ML signals
+        run: python agents/data_sources/arxiv_ml.py
 
 
-      # -------------------------
-      # WRITER AGENT
-      # -------------------------
+      ################################################
+      # TREND SIGNAL PROCESSING
+      ################################################
 
-      - name: Run Idea Writer
-        run: |
-          python agents/writer.py
-
-
-      # -------------------------
-      # MOMENTUM AGENT
-      # -------------------------
-
-      - name: Run Momentum Analyzer
-        run: |
-          python agents/momentum.py
+      - name: Run Trend Scanner
+        run: python trend_scanner/scanner.py
 
 
-      # -------------------------
-      # SCORING AGENT
-      # -------------------------
+      ################################################
+      # PROBLEM EXTRACTION
+      ################################################
 
-      - name: Run Opportunity Scorer
-        run: |
-          python agents/scorer.py
+      - name: Extract Problems
+        run: python problem_extractor/extractor.py
+
+
+      ################################################
+      # EMBEDDING
+      ################################################
+
+      - name: Generate Embeddings
+        run: python embedding_agent/embedding_agent.py
+
+
+      ################################################
+      # CLUSTER PROBLEMS
+      ################################################
+
+      - name: Cluster Problems
+        run: python idea_clusterer/clusterer.py
+
+
+      ################################################
+      # GENERATE IDEAS
+      ################################################
+
+      - name: Generate Startup Ideas
+        run: python idea_generator/generator.py
+
+
+      ################################################
+      # WRITE FULL IDEA
+      ################################################
+
+      - name: Write Startup Concepts
+        run: python idea_writer/writer.py
+
+
+      ################################################
+      # MARKET ANALYSIS
+      ################################################
+
+      - name: Analyze Market
+        run: python market_analyzer/analyzer.py
+
+
+      ################################################
+      # TREND MOMENTUM
+      ################################################
+
+      - name: Calculate Trend Momentum
+        run: python trend_momentum/momentum.py
+
+
+      ################################################
+      # GAP DETECTION
+      ################################################
+
+      - name: Detect Opportunity Gaps
+        run: python opportunity_gap_detector/gap_detector.py
+
+
+      ################################################
+      # RANK OPPORTUNITIES
+      ################################################
+
+      - name: Rank Opportunities
+        run: python opportunity_ranker/ranker.py
