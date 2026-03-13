@@ -2,19 +2,33 @@ import os
 import requests
 import time
 import re
+import math
+
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+# GitHub token dari GitHub Actions secret
+GITHUB_TOKEN = os.getenv("AI_STARTUP_TOKEN")
+
+
 HN_API = "https://hn.algolia.com/api/v1/search"
 GITHUB_API = "https://api.github.com/search/repositories"
 
-HEADERS = {
+
+REQUEST_TIMEOUT = 30
+
+
+SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}"
 }
 
-REQUEST_TIMEOUT = 30
+
+GITHUB_HEADERS = {
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json"
+}
 
 
 # ==========================
@@ -25,12 +39,10 @@ def load_ideas():
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem"
 
-    r = requests.get(url, headers=HEADERS)
+    r = requests.get(url, headers=SUPABASE_HEADERS)
 
     if r.status_code != 200:
-
-        print("Failed loading ideas")
-
+        print("Failed loading ideas:", r.text)
         return []
 
     return r.json()
@@ -49,9 +61,11 @@ def extract_keywords(text):
     words = text.split()
 
     stopwords = [
-        "the","and","for","with","that","this",
-        "from","into","using","build","system",
-        "platform","software"
+        "the","and","for","with","that","this","from",
+        "into","using","build","system","platform",
+        "software","current","existing","methods",
+        "approach","model","models","data","based",
+        "analysis","problem","solution","applications"
     ]
 
     keywords = []
@@ -66,7 +80,7 @@ def extract_keywords(text):
 
         keywords.append(w)
 
-    return " ".join(keywords[:5])
+    return " ".join(keywords[:3])
 
 
 # ==========================
@@ -83,7 +97,15 @@ def hn_score(query):
             "hitsPerPage": 10
         }
 
-        r = requests.get(HN_API, params=params, timeout=REQUEST_TIMEOUT)
+        r = requests.get(
+            HN_API,
+            params=params,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        if r.status_code != 200:
+            print("HN error:", r.text)
+            return 0
 
         data = r.json()
 
@@ -100,7 +122,9 @@ def hn_score(query):
 
         return score
 
-    except:
+    except Exception as e:
+
+        print("HN exception:", e)
 
         return 0
 
@@ -120,7 +144,16 @@ def github_score(query):
             "per_page": 5
         }
 
-        r = requests.get(GITHUB_API, params=params, timeout=REQUEST_TIMEOUT)
+        r = requests.get(
+            GITHUB_API,
+            headers=GITHUB_HEADERS,
+            params=params,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        if r.status_code != 200:
+            print("GitHub API error:", r.text)
+            return 0
 
         data = r.json()
 
@@ -137,7 +170,9 @@ def github_score(query):
 
         return score
 
-    except:
+    except Exception as e:
+
+        print("GitHub exception:", e)
 
         return 0
 
@@ -148,42 +183,45 @@ def github_score(query):
 
 def calculate_momentum(hn, gh):
 
-    momentum = (hn * 1.2) + (gh * 0.8)
+    hn_component = math.log1p(hn) * 3
+    gh_component = math.log1p(gh) * 2
+
+    momentum = hn_component + gh_component
 
     return int(momentum)
 
 
 # ==========================
-# NORMALIZE VELOCITY
+# VELOCITY NORMALIZATION
 # ==========================
 
 def normalize_velocity(momentum):
 
-    if momentum > 10000:
+    if momentum > 2000:
         return 10
 
-    if momentum > 5000:
+    if momentum > 1000:
         return 9
 
-    if momentum > 2000:
+    if momentum > 500:
         return 8
 
-    if momentum > 1000:
+    if momentum > 200:
         return 7
 
-    if momentum > 500:
+    if momentum > 100:
         return 6
 
-    if momentum > 200:
+    if momentum > 50:
         return 5
 
-    if momentum > 100:
+    if momentum > 20:
         return 4
 
-    if momentum > 50:
+    if momentum > 10:
         return 3
 
-    if momentum > 20:
+    if momentum > 5:
         return 2
 
     return 1
@@ -224,16 +262,14 @@ def main():
     ideas = load_ideas()
 
     if not ideas:
-
         print("No ideas found")
-
         return
 
     for idea in ideas:
 
         problem = idea["problem"]
 
-        print("Analyzing:", problem)
+        print("\nAnalyzing:", problem)
 
         keywords = extract_keywords(problem)
 
