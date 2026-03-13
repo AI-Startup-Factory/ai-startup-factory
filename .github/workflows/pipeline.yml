@@ -1,97 +1,73 @@
 name: AI Startup Factory Pipeline
 
 on:
+
   workflow_dispatch:
+
   schedule:
     - cron: "0 */6 * * *"
 
+
 jobs:
-  run-agents:
+
+  run-pipeline:
+
     runs-on: ubuntu-latest
 
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
+
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
+
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests
 
-      - name: Verify sentence-transformers
-        run: |
-          pip list | grep sentence || true
 
-      - name: Run Trend Scanner
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # -------------------------
+      # SCRAPER AGENT
+      # -------------------------
+
+      - name: Run Scraper
         run: |
-          echo "Running Trend Scanner"
-          python agents/trend_scanner/scanner.py
+          python agents/scraper.py
+
+
+      # -------------------------
+      # WRITER AGENT
+      # -------------------------
 
       - name: Run Idea Writer
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          echo "Running Idea Writer"
-          python agents/idea_writer/writer.py
+          python agents/writer.py
 
-      - name: Run Embedding Agent
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      # -------------------------
+      # MOMENTUM AGENT
+      # -------------------------
+
+      - name: Run Momentum Analyzer
         run: |
-          echo "Running Embedding Agent"
-          python agents/embedding_agent/embedding_agent.py
+          python agents/momentum.py
 
-      - name: Run Idea Clusterer
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      # -------------------------
+      # SCORING AGENT
+      # -------------------------
+
+      - name: Run Opportunity Scorer
         run: |
-          echo "Running Idea Clusterer"
-          python agents/idea_clusterer/clusterer.py
-
-      - name: Run Opportunity Gap Detector
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "Running Opportunity Gap Detector"
-          python agents/opportunity_gap_detector/gap_detector.py
-
-      - name: Run Market Analyzer
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "Running Market Analyzer"
-          python agents/market_analyzer/analyzer.py
-
-      - name: Run Opportunity Ranker
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "Running Opportunity Ranker"
-          python agents/opportunity_ranker/ranker.py
-
-      - name: Run Trend Momentum Analyzer
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          echo "Running Trend Momentum Analyzer"
-          python agents/trend_momentum/momentum.py
-
-      - name: Pipeline Finished
-        run: echo "AI Startup Factory Pipeline completed"
+          python agents/scorer.py
