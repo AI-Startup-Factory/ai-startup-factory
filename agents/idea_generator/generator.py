@@ -1,8 +1,15 @@
 import os
-import json
 import requests
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}"
+}
 
 MODEL_LIST = [
 "stepfun/step-3.5-flash:free",
@@ -28,20 +35,32 @@ MODEL_LIST = [
 "google/gemma-3-4b-it:free",
 "google/gemma-3n-e4b-it:free",
 "google/gemma-3-12b-it:free",
-"google/gemma-3n-e2b-it:free",
-"nvidia/llama-nemotron-embed-vl-1b-v2:free"
+"google/gemma-3n-e2b-it:free"
 ]
 
 
+# ==================================
+# LOAD POSTS FROM SUPABASE
+# ==================================
+
 def load_posts():
 
-    with open("data/trends.json") as f:
-        return json.load(f)
+    url = f"{SUPABASE_URL}/rest/v1/signals?select=title&limit=20"
+
+    r = requests.get(url, headers=HEADERS)
+
+    if r.status_code != 200:
+        print("Failed loading signals:", r.text)
+        return []
+
+    data = r.json()
+
+    return data
 
 
-# ===============================
+# ==================================
 # DISCOVER EXTRA FREE MODELS
-# ===============================
+# ==================================
 
 def discover_free_models():
 
@@ -61,15 +80,14 @@ def discover_free_models():
         model_id = m["id"]
 
         if ":free" in model_id and model_id not in MODEL_LIST:
-
             discovered.append(model_id)
 
     return discovered
 
 
-# ===============================
+# ==================================
 # CALL AI WITH FALLBACK
-# ===============================
+# ==================================
 
 def call_ai(prompt):
 
@@ -80,7 +98,6 @@ def call_ai(prompt):
         "Content-Type": "application/json"
     }
 
-    # primary models
     for model in MODEL_LIST:
 
         print("Trying model:", model)
@@ -109,7 +126,6 @@ def call_ai(prompt):
         except:
             continue
 
-    # discover new models
     print("Discovering additional free models")
 
     extra_models = discover_free_models()
@@ -147,11 +163,14 @@ def call_ai(prompt):
     return None
 
 
-# ===============================
+# ==================================
 # GENERATE IDEAS
-# ===============================
+# ==================================
 
 def generate_ideas(posts):
+
+    if not posts:
+        return "No signals found"
 
     headlines = [p["title"] for p in posts[:5]]
 
@@ -181,9 +200,9 @@ Return a numbered list of startup ideas.
     return response
 
 
-# ===============================
+# ==================================
 # MAIN
-# ===============================
+# ==================================
 
 if __name__ == "__main__":
 
