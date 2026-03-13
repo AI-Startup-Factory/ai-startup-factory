@@ -2,16 +2,24 @@ name: AI Startup Factory Pipeline
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "0 */6 * * *"
 
+concurrency:
+  group: ai-startup-factory
+  cancel-in-progress: false
+
 jobs:
   run-agents:
+
     runs-on: ubuntu-latest
+
+    timeout-minutes: 45
 
     steps:
 
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
 
@@ -19,6 +27,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
+          cache: "pip"
 
 
       - name: Install dependencies
@@ -29,41 +38,16 @@ jobs:
 
       - name: Verify sentence-transformers
         run: |
-          pip list | grep sentence
+          pip list | grep sentence || true
 
 
-      # ---------------------------------------
-      # 1 TREND SCANNER
-      # ---------------------------------------
-
-      - name: Run Trend Scanner
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      - name: Running Trend Scanner
         run: |
           echo "Running Trend Scanner"
           python agents/trend_scanner/scanner.py
 
 
-      # ---------------------------------------
-      # 2 PROBLEM EXTRACTION
-      # ---------------------------------------
-
-      - name: Run Problem Extraction Agent
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          echo "Running Problem Extraction"
-          python agents/problem_extractor/extractor.py
-
-
-      # ---------------------------------------
-      # 3 IDEA WRITER
-      # ---------------------------------------
-
-      - name: Run Idea Writer
+      - name: Running Idea Writer
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -73,80 +57,61 @@ jobs:
           python agents/idea_writer/writer.py
 
 
-      # ---------------------------------------
-      # 4 EMBEDDING AGENT
-      # ---------------------------------------
-
-      - name: Run Embedding Agent
+      - name: Running Embedding Agent
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "Generating embeddings"
+          echo "Running Embedding Agent"
           python agents/embedding_agent/embedding_agent.py
 
 
-      # ---------------------------------------
-      # 5 CLUSTERING
-      # ---------------------------------------
-
-      - name: Run Idea Clustering
+      - name: Running Idea Clustering
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "Running clustering"
+          echo "Running Idea Clustering"
           python agents/idea_clusterer/clusterer.py
 
 
-      # ---------------------------------------
-      # 6 OPPORTUNITY GAP DETECTOR
-      # ---------------------------------------
-
-      - name: Run Opportunity Gap Detector
+      - name: Running Opportunity Gap Detector
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "Detecting opportunity gaps"
+          echo "Running Opportunity Gap Detector"
           python agents/opportunity_gap_detector/gap_detector.py
 
 
-      # ---------------------------------------
-      # 7 MARKET ANALYZER
-      # ---------------------------------------
-
-      - name: Run Market Analyzer
+      - name: Running Market Analyzer
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "Running market analysis"
+          echo "Running Market Analyzer"
           python agents/market_analyzer/analyzer.py
 
 
-      # ---------------------------------------
-      # 8 TREND MOMENTUM
-      # ---------------------------------------
-
-      - name: Run Trend Momentum Analyzer
+      - name: Running Opportunity Ranker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "Analyzing trend momentum"
+          echo "Running Opportunity Ranker"
+          python agents/opportunity_ranker/ranker.py
+
+
+      - name: Running Trend Momentum Analyzer
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "Running Trend Momentum Analyzer"
           python agents/trend_momentum/momentum.py
 
 
-      # ---------------------------------------
-      # 9 OPPORTUNITY RANKER
-      # ---------------------------------------
-
-      - name: Run Opportunity Ranker
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      - name: Pipeline Finished
         run: |
-          echo "Ranking startup opportunities"
-          python agents/opportunity_ranker/ranker.py
+          echo "AI Startup Factory Pipeline Completed"
