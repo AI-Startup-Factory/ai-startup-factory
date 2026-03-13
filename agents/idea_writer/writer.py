@@ -1,6 +1,8 @@
 import os
 import time
+import json
 import requests
+import re
 
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -8,8 +10,8 @@ SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 
-BATCH_SIZE = 100
-DELAY = 0.7
+BATCH_SIZE = 20
+DELAY = 0.8
 MAX_RETRY = 3
 
 
@@ -20,16 +22,16 @@ headers = {
 }
 
 
-# -----------------------------------
-# FETCH IDEAS WITHOUT SOLUTION
-# -----------------------------------
+# -----------------------------
+# FETCH UNPROCESSED SIGNALS
+# -----------------------------
 
-def fetch_ideas():
+def fetch_signals():
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas"
+    url = f"{SUPABASE_URL}/rest/v1/signals"
 
     params = {
-        "solution": "is.null",
+        "processed": "eq.false",
         "limit": BATCH_SIZE
     }
 
@@ -42,27 +44,45 @@ def fetch_ideas():
     return r.json()
 
 
-# -----------------------------------
-# UPDATE IDEA
-# -----------------------------------
+# -----------------------------
+# INSERT IDEA
+# -----------------------------
 
-def update_idea(idea_id, data):
+def insert_idea(data):
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
+    url = f"{SUPABASE_URL}/rest/v1/ideas"
+
+    r = requests.post(
+        url,
+        headers=headers,
+        json=data
+    )
+
+    if r.status_code not in [200, 201]:
+        print("Insert failed:", r.text)
+
+
+# -----------------------------
+# MARK SIGNAL PROCESSED
+# -----------------------------
+
+def mark_processed(signal_id):
+
+    url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
 
     r = requests.patch(
         url,
         headers=headers,
-        json=data
+        json={"processed": True}
     )
 
     if r.status_code not in [200, 204]:
         print("Update failed:", r.text)
 
 
-# -----------------------------------
-# CALL LLM WITH RETRY
-# -----------------------------------
+# -----------------------------
+# LLM CALL WITH RETRY
+# -----------------------------
 
 def call_llm(prompt):
 
@@ -104,19 +124,22 @@ def call_llm(prompt):
     return None
 
 
-# -----------------------------------
-# BUILD PROMPT
-# -----------------------------------
+# -----------------------------
+# PROMPT
+# -----------------------------
 
-def build_prompt(problem):
+def build_prompt(title, content):
 
     return f"""
-You are a startup founder.
+You are a startup founder and market analyst.
 
-Based on the problem below, propose a startup idea.
+Analyze the signal below and extract a startup opportunity.
 
-Return JSON with fields:
+Return STRICT JSON only.
 
+Fields:
+
+problem
 solution
 market
 audience
@@ -125,58 +148,93 @@ moat
 market_size
 competition
 
-Problem:
-{problem}
+Signal Title:
+{title}
+
+Signal Content:
+{content}
 """
 
 
-# -----------------------------------
-# PARSE JSON (simple)
-# -----------------------------------
+# -----------------------------
+# CLEAN JSON FROM LLM
+# -----------------------------
 
-import json
+def clean_json(text):
 
+    text = text.strip()
+
+    text = re.sub(r"^```json", "", text)
+    text = re.sub(r"```$", "", text)
+
+    return text.strip()
+
+
+# -----------------------------
+# PARSE JSON
+# -----------------------------
 
 def parse_response(text):
 
     try:
-        return json.loads(text)
-    except:
+        cleaned = clean_json(text)
+        return json.loads(cleaned)
+
+    except Exception as e:
+
+        print("JSON parse failed:", e)
+
         return None
 
 
-# -----------------------------------
+# -----------------------------
 # MAIN
-# -----------------------------------
+# -----------------------------
 
 def main():
 
-    ideas = fetch_ideas()
+    signals = fetch_signals()
 
-    print("Ideas to process:", len(ideas))
+    print("Signals to process:", len(signals))
 
     processed = 0
 
-    for idea in ideas:
+    for s in signals:
 
-        idea_id = idea["id"]
-        problem = idea["problem"]
+        signal_id = s["id"]
+        title = s["title"]
+        content = s.get("content", "")
 
-        prompt = build_prompt(problem)
+        prompt = build_prompt(title, content)
 
         response = call_llm(prompt)
 
-        if response:
+        if not response:
+            continue
 
-            parsed = parse_response(response)
+        parsed = parse_response(response)
 
-            if parsed:
+        if not parsed:
+            continue
 
-                update_idea(idea_id, parsed)
+        idea_data = {
+            "problem": parsed.get("problem"),
+            "solution": parsed.get("solution"),
+            "market": parsed.get("market"),
+            "audience": parsed.get("audience"),
+            "revenue_model": parsed.get("revenue_model"),
+            "moat": parsed.get("moat"),
+            "market_size": parsed.get("market_size"),
+            "competition": parsed.get("competition")
+        }
 
-                processed += 1
+        insert_idea(idea_data)
 
-                print("Idea written:", idea_id)
+        mark_processed(signal_id)
+
+        processed += 1
+
+        print("Idea created from signal:", signal_id)
 
         time.sleep(DELAY)
 
