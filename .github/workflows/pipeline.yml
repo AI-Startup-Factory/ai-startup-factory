@@ -2,30 +2,22 @@ name: AI Startup Factory Pipeline
 
 on:
 workflow_dispatch:
-
 schedule:
 - cron: "0 */6 * * *"
 
-concurrency:
-group: ai-startup-factory
-cancel-in-progress: false
-
 jobs:
 run-agents:
-
 runs-on: ubuntu-latest
-timeout-minutes: 45
 
 steps:
 
-  - name: Checkout repo
+  - name: Checkout repository
     uses: actions/checkout@v4
 
   - name: Setup Python
     uses: actions/setup-python@v4
     with:
       python-version: "3.10"
-      cache: "pip"
 
   - name: Install dependencies
     run: |
@@ -36,11 +28,8 @@ steps:
     run: |
       pip list | grep sentence || true
 
-
-  # =========================
-  # AGENT 1 — TREND SCANNER
-  # =========================
-  - name: Running Trend Scanner
+  # -------- Trend Scanner --------
+  - name: Run Trend Scanner
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -48,11 +37,8 @@ steps:
       echo "Running Trend Scanner"
       python agents/trend_scanner/scanner.py
 
-
-  # =========================
-  # AGENT 2 — IDEA WRITER
-  # =========================
-  - name: Running Idea Writer
+  # -------- Idea Writer --------
+  - name: Run Idea Writer
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -61,11 +47,8 @@ steps:
       echo "Running Idea Writer"
       python agents/idea_writer/writer.py
 
-
-  # =========================
-  # AGENT 3 — EMBEDDING
-  # =========================
-  - name: Running Embedding Agent
+  # -------- Embedding Agent --------
+  - name: Run Embedding Agent
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -73,23 +56,17 @@ steps:
       echo "Running Embedding Agent"
       python agents/embedding_agent/embedding_agent.py
 
-
-  # =========================
-  # AGENT 4 — CLUSTERING
-  # =========================
-  - name: Running Idea Clustering
+  # -------- Clustering --------
+  - name: Run Idea Clusterer
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
     run: |
-      echo "Running Idea Clustering"
+      echo "Running Idea Clusterer"
       python agents/idea_clusterer/clusterer.py
 
-
-  # =========================
-  # AGENT 5 — GAP DETECTOR
-  # =========================
-  - name: Running Opportunity Gap Detector
+  # -------- Gap Detector --------
+  - name: Run Opportunity Gap Detector
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -97,11 +74,8 @@ steps:
       echo "Running Opportunity Gap Detector"
       python agents/opportunity_gap_detector/gap_detector.py
 
-
-  # =========================
-  # AGENT 6 — MARKET ANALYZER
-  # =========================
-  - name: Running Market Analyzer
+  # -------- Market Analyzer --------
+  - name: Run Market Analyzer
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -110,11 +84,8 @@ steps:
       echo "Running Market Analyzer"
       python agents/market_analyzer/analyzer.py
 
-
-  # =========================
-  # AGENT 7 — OPPORTUNITY RANKER
-  # =========================
-  - name: Running Opportunity Ranker
+  # -------- Opportunity Ranker --------
+  - name: Run Opportunity Ranker
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -122,11 +93,8 @@ steps:
       echo "Running Opportunity Ranker"
       python agents/opportunity_ranker/ranker.py
 
-
-  # =========================
-  # AGENT 8 — TREND MOMENTUM
-  # =========================
-  - name: Running Trend Momentum Analyzer
+  # -------- Trend Momentum --------
+  - name: Run Trend Momentum Analyzer
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -134,7 +102,5 @@ steps:
       echo "Running Trend Momentum Analyzer"
       python agents/trend_momentum/momentum.py
 
-
   - name: Pipeline Finished
-    run: |
-      echo "AI Startup Factory Pipeline Completed"
+    run: echo "AI Startup Factory Pipeline completed"
