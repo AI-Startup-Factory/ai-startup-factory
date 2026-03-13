@@ -88,7 +88,7 @@ jobs:
       ################################################
 
       - name: Run Trend Scanner
-        run: python trend_scanner/scanner.py
+        run: python agents/trend_scanner/scanner.py
 
 
       ################################################
@@ -96,7 +96,7 @@ jobs:
       ################################################
 
       - name: Extract Problems
-        run: python problem_extractor/extractor.py
+        run: python agents/problem_extractor/extractor.py
 
 
       ################################################
@@ -104,7 +104,7 @@ jobs:
       ################################################
 
       - name: Generate Embeddings
-        run: python embedding_agent/embedding_agent.py
+        run: python agents/embedding_agent/embedding_agent.py
 
 
       ################################################
@@ -112,7 +112,7 @@ jobs:
       ################################################
 
       - name: Cluster Problems
-        run: python idea_clusterer/clusterer.py
+        run: python agents/idea_clusterer/clusterer.py
 
 
       ################################################
@@ -120,7 +120,7 @@ jobs:
       ################################################
 
       - name: Generate Startup Ideas
-        run: python idea_generator/generator.py
+        run: python agents/idea_generator/generator.py
 
 
       ################################################
@@ -128,7 +128,7 @@ jobs:
       ################################################
 
       - name: Write Startup Concepts
-        run: python idea_writer/writer.py
+        run: python agents/idea_writer/writer.py
 
 
       ################################################
@@ -136,7 +136,7 @@ jobs:
       ################################################
 
       - name: Analyze Market
-        run: python market_analyzer/analyzer.py
+        run: python agents/market_analyzer/analyzer.py
 
 
       ################################################
@@ -144,7 +144,7 @@ jobs:
       ################################################
 
       - name: Calculate Trend Momentum
-        run: python trend_momentum/momentum.py
+        run: python agents/trend_momentum/momentum.py
 
 
       ################################################
@@ -152,7 +152,7 @@ jobs:
       ################################################
 
       - name: Detect Opportunity Gaps
-        run: python opportunity_gap_detector/gap_detector.py
+        run: python agents/opportunity_gap_detector/gap_detector.py
 
 
       ################################################
@@ -160,4 +160,4 @@ jobs:
       ################################################
 
       - name: Rank Opportunities
-        run: python opportunity_ranker/ranker.py
+        run: python agents/opportunity_ranker/ranker.py
