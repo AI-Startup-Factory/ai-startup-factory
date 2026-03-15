@@ -1,14 +1,15 @@
 import os
 import requests
+import re
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-HEADERS = {
+SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}"
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
 }
 
 MODEL_LIST = [
@@ -18,36 +19,28 @@ MODEL_LIST = [
 "nvidia/nemotron-3-nano-30b-a3b:free",
 "arcee-ai/trinity-mini:free",
 "nvidia/nemotron-nano-9b-v2:free",
-"nvidia/nemotron-nano-12b-v2-vl:free",
 "openai/gpt-oss-120b:free",
 "meta-llama/llama-3.3-70b-instruct:free",
 "qwen/qwen3-coder:free",
-"qwen/qwen3-next-80b-a3b-instruct:free",
 "openai/gpt-oss-20b:free",
-"liquid/lfm-2.5-1.2b-thinking:free",
 "google/gemma-3-27b-it:free",
-"liquid/lfm-2.5-1.2b-instruct:free",
 "mistralai/mistral-small-3.1-24b-instruct:free",
-"cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
 "qwen/qwen3-4b:free",
 "meta-llama/llama-3.2-3b-instruct:free",
-"nousresearch/hermes-3-llama-3.1-405b:free",
 "google/gemma-3-4b-it:free",
-"google/gemma-3n-e4b-it:free",
-"google/gemma-3-12b-it:free",
-"google/gemma-3n-e2b-it:free"
+"google/gemma-3-12b-it:free"
 ]
 
 
-# ==================================
-# LOAD POSTS FROM SUPABASE
-# ==================================
+# ==============================
+# LOAD SIGNALS FROM SUPABASE
+# ==============================
 
 def load_posts():
 
-    url = f"{SUPABASE_URL}/rest/v1/signals?select=title&limit=20"
+    url = f"{SUPABASE_URL}/rest/v1/signals?select=title&limit=25"
 
-    r = requests.get(url, headers=HEADERS)
+    r = requests.get(url, headers=SUPABASE_HEADERS)
 
     if r.status_code != 200:
         print("Failed loading signals:", r.text)
@@ -58,9 +51,9 @@ def load_posts():
     return data
 
 
-# ==================================
+# ==============================
 # DISCOVER EXTRA FREE MODELS
-# ==================================
+# ==============================
 
 def discover_free_models():
 
@@ -85,9 +78,9 @@ def discover_free_models():
     return discovered
 
 
-# ==================================
-# CALL AI WITH FALLBACK
-# ==================================
+# ==============================
+# CALL AI
+# ==============================
 
 def call_ai(prompt):
 
@@ -98,6 +91,7 @@ def call_ai(prompt):
         "Content-Type": "application/json"
     }
 
+    # Try primary models
     for model in MODEL_LIST:
 
         print("Trying model:", model)
@@ -126,6 +120,7 @@ def call_ai(prompt):
         except:
             continue
 
+    # Discover new models
     print("Discovering additional free models")
 
     extra_models = discover_free_models()
@@ -163,18 +158,63 @@ def call_ai(prompt):
     return None
 
 
-# ==================================
+# ==============================
+# PARSE IDEAS
+# ==============================
+
+def parse_ideas(text):
+
+    ideas = []
+
+    lines = text.split("\n")
+
+    for line in lines:
+
+        line = line.strip()
+
+        if re.match(r"^\d+[\.\)]", line):
+
+            idea = re.sub(r"^\d+[\.\)]\s*", "", line)
+
+            ideas.append(idea)
+
+    return ideas
+
+
+# ==============================
+# SAVE IDEAS TO SUPABASE
+# ==============================
+
+def save_ideas(ideas):
+
+    url = f"{SUPABASE_URL}/rest/v1/ideas"
+
+    for idea in ideas:
+
+        payload = {
+            "idea": idea
+        }
+
+        r = requests.post(url, headers=SUPABASE_HEADERS, json=payload)
+
+        if r.status_code not in [200, 201]:
+            print("Insert failed:", r.text)
+        else:
+            print("Inserted idea")
+
+
+# ==============================
 # GENERATE IDEAS
-# ==================================
+# ==============================
 
 def generate_ideas(posts):
 
     if not posts:
-        return "No signals found"
+        return []
 
     headlines = [p["title"] for p in posts[:5]]
 
-    print("\nHeadlines:")
+    print("\nHeadlines used for generation:")
 
     for h in headlines:
         print("-", h)
@@ -195,21 +235,39 @@ Return a numbered list of startup ideas.
     response = call_ai(prompt)
 
     if not response:
-        return "AI generation failed"
+        print("AI generation failed")
+        return []
 
-    return response
+    ideas = parse_ideas(response)
+
+    return ideas
 
 
-# ==================================
+# ==============================
 # MAIN
-# ==================================
+# ==============================
 
 if __name__ == "__main__":
 
+    print("Loading signals...")
+
     posts = load_posts()
+
+    print("Signals loaded:", len(posts))
 
     ideas = generate_ideas(posts)
 
-    print("\nGenerated Ideas:\n")
+    if not ideas:
+        print("No ideas generated")
+        exit()
 
-    print(ideas)
+    print("\nGenerated Ideas:")
+
+    for idea in ideas:
+        print("-", idea)
+
+    print("\nSaving ideas to database...")
+
+    save_ideas(ideas)
+
+    print("\nIdea generation completed")
