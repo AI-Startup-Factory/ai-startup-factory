@@ -3,11 +3,8 @@ name: AI Startup Factory Debug Pipeline
 on:
   workflow_dispatch:
 
-
 jobs:
-
   debug-pipeline:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -15,7 +12,6 @@ jobs:
       # =========================
       # CHECKOUT REPOSITORY
       # =========================
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -23,7 +19,6 @@ jobs:
       # =========================
       # SETUP PYTHON
       # =========================
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -33,7 +28,6 @@ jobs:
       # =========================
       # INSTALL DEPENDENCIES
       # =========================
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -43,7 +37,6 @@ jobs:
       # =========================
       # DEBUG: SHOW REPO STRUCTURE
       # =========================
-
       - name: Debug repository structure
         run: |
           echo "===== REPOSITORY STRUCTURE ====="
@@ -53,7 +46,6 @@ jobs:
       # =========================
       # DEBUG: PYTHON SYNTAX CHECK
       # =========================
-
       - name: Debug python syntax
         run: |
           echo "===== PYTHON SYNTAX CHECK ====="
@@ -63,20 +55,20 @@ jobs:
       # =========================
       # DEBUG: VERIFY ENV VARIABLES
       # =========================
-
       - name: Debug environment variables
         run: |
           echo "Checking environment variables..."
-          echo "SUPABASE_URL set?"
+
+          echo "SUPABASE_URL:"
           if [ -z "$SUPABASE_URL" ]; then echo "MISSING"; else echo "OK"; fi
 
-          echo "SUPABASE_ANON_KEY set?"
+          echo "SUPABASE_ANON_KEY:"
           if [ -z "$SUPABASE_ANON_KEY" ]; then echo "MISSING"; else echo "OK"; fi
 
-          echo "OPENROUTER_API_KEY set?"
+          echo "OPENROUTER_API_KEY:"
           if [ -z "$OPENROUTER_API_KEY" ]; then echo "MISSING"; else echo "OK"; fi
 
-          echo "AI_STARTUP_TOKEN set?"
+          echo "AI_STARTUP_TOKEN:"
           if [ -z "$AI_STARTUP_TOKEN" ]; then echo "MISSING"; else echo "OK"; fi
 
         env:
@@ -91,7 +83,7 @@ jobs:
       # =========================
 
       - name: Run reddit startups
-        run: python agents/reddit_startups.py
+        run: python agents/data_sources/reddit_startups.py
         env: &envvars
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -99,67 +91,65 @@ jobs:
           AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
 
       - name: Run reddit ml
-        run: python agents/reddit_ml.py
+        run: python agents/data_sources/reddit_ml.py
         env: *envvars
 
       - name: Run reddit saas
-        run: python agents/reddit_saas.py
+        run: python agents/data_sources/reddit_saas.py
         env: *envvars
 
       - name: Run github trending
-        run: python agents/github_trending.py
+        run: python agents/data_sources/github_trending.py
         env: *envvars
 
       - name: Run github issues
-        run: python agents/github_issues.py
+        run: python agents/data_sources/github_issues.py
         env: *envvars
 
       - name: Run hackernews
-        run: python agents/hackernews.py
+        run: python agents/data_sources/hackernews.py
         env: *envvars
 
       - name: Run techcrunch
-        run: python agents/techcrunch.py
+        run: python agents/data_sources/techcrunch.py
         env: *envvars
 
       - name: Run producthunt
-        run: python agents/producthunt.py
+        run: python agents/data_sources/producthunt.py
         env: *envvars
 
       - name: Run devto
-        run: python agents/devto.py
+        run: python agents/data_sources/devto.py
         env: *envvars
 
       - name: Run arxiv ai
-        run: python agents/arxiv_ai.py
+        run: python agents/data_sources/arxiv_ai.py
         env: *envvars
 
       - name: Run arxiv ml
-        run: python agents/arxiv_ml.py
+        run: python agents/data_sources/arxiv_ml.py
         env: *envvars
 
       - name: Run stackoverflow
-        run: python agents/stackoverflow.py
+        run: python agents/data_sources/stackoverflow.py
         env: *envvars
 
       - name: Run yc requests
-        run: python agents/yc_requests.py
+        run: python agents/data_sources/yc_requests.py
         env: *envvars
 
 
       # =========================
       # TREND SCANNER
       # =========================
-
       - name: Run trend scanner
         run: python agents/trend_scanner/scanner.py
         env: *envvars
 
 
       # =========================
-      # IDEA GENERATION
+      # IDEA GENERATOR
       # =========================
-
       - name: Run idea generator
         run: python agents/idea_generator/generator.py
         env: *envvars
@@ -168,7 +158,6 @@ jobs:
       # =========================
       # PROBLEM EXTRACTION
       # =========================
-
       - name: Run problem extractor
         run: python agents/problem_extractor/extractor.py
         env: *envvars
@@ -177,7 +166,6 @@ jobs:
       # =========================
       # EMBEDDING
       # =========================
-
       - name: Run embedding agent
         run: python agents/embedding_agent/embedding_agent.py
         env: *envvars
@@ -186,7 +174,6 @@ jobs:
       # =========================
       # SEMANTIC DEDUPLICATION
       # =========================
-
       - name: Run semantic deduplicator
         run: python agents/semantic_deduplicator/semantic_deduplicator.py
         env: *envvars
@@ -195,8 +182,7 @@ jobs:
       # =========================
       # CLUSTERING
       # =========================
-
-      - name: Run clusterer
+      - name: Run idea clusterer
         run: python agents/idea_clusterer/clusterer.py
         env: *envvars
 
@@ -204,16 +190,38 @@ jobs:
       # =========================
       # MARKET ANALYSIS
       # =========================
-
       - name: Run market analyzer
         run: python agents/market_analyzer/analyzer.py
         env: *envvars
 
 
       # =========================
-      # OPPORTUNITY RANKING
+      # VECTOR OPPORTUNITY DISCOVERY
       # =========================
+      - name: Run vector opportunity discovery
+        run: python agents/opportunity_discovery/vector_discovery.py
+        env: *envvars
 
+
+      # =========================
+      # OPPORTUNITY GAP DETECTOR
+      # =========================
+      - name: Run opportunity gap detector
+        run: python agents/opportunity_gap_detector/gap_detector.py
+        env: *envvars
+
+
+      # =========================
+      # OPPORTUNITY SCORER
+      # =========================
+      - name: Run opportunity scorer
+        run: python agents/opportunity_scorer/scorer.py
+        env: *envvars
+
+
+      # =========================
+      # OPPORTUNITY RANKER
+      # =========================
       - name: Run opportunity ranker
         run: python agents/opportunity_ranker/ranker.py
         env: *envvars
@@ -222,7 +230,6 @@ jobs:
       # =========================
       # STARTUP GENERATOR
       # =========================
-
       - name: Run startup blueprint generator
         run: python agents/startup_generator/startup_blueprint_generator.py
         env: *envvars
@@ -231,7 +238,6 @@ jobs:
       # =========================
       # MOMENTUM
       # =========================
-
       - name: Run trend momentum
         run: python agents/trend_momentum/momentum.py
         env: *envvars
@@ -240,7 +246,6 @@ jobs:
       # =========================
       # WRITER
       # =========================
-
       - name: Run writer
         run: python agents/idea_writer/writer.py
         env: *envvars
@@ -249,6 +254,5 @@ jobs:
       # =========================
       # FINISH
       # =========================
-
       - name: Debug pipeline finished
         run: echo "Debug pipeline completed successfully"
