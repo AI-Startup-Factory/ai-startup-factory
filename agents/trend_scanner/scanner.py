@@ -3,6 +3,8 @@ import sys
 import importlib
 import requests
 from pathlib import Path
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 # -------------------------------------------------
@@ -20,6 +22,26 @@ sys.path.append(str(ROOT_DIR))
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
 
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Missing SUPABASE environment variables")
+    sys.exit(1)
+
+
+# -------------------------------------------------
+# HTTP SESSION WITH RETRY
+# -------------------------------------------------
+
+session = requests.Session()
+
+retries = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+)
+
+session.mount("https://", HTTPAdapter(max_retries=retries))
+
+
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -28,19 +50,99 @@ headers = {
 
 
 # -------------------------------------------------
+# VALID SIGNAL FIELDS (SCHEMA SAFE)
+# -------------------------------------------------
+
+VALID_FIELDS = {
+    "source",
+    "title",
+    "url",
+    "created_at"
+}
+
+
+# -------------------------------------------------
+# CLEAN SIGNAL PAYLOAD
+# -------------------------------------------------
+
+def sanitize_signal(signal):
+
+    clean = {}
+
+    for k, v in signal.items():
+
+        if k in VALID_FIELDS and v:
+
+            clean[k] = v
+
+    return clean
+
+
+# -------------------------------------------------
+# CHECK DUPLICATE URL
+# -------------------------------------------------
+
+def is_duplicate(url):
+
+    try:
+
+        r = session.get(
+            f"{SUPABASE_URL}/rest/v1/signals",
+            headers=headers,
+            params={
+                "select": "id",
+                "url": f"eq.{url}",
+                "limit": 1
+            },
+            timeout=10
+        )
+
+        if r.status_code != 200:
+            return False
+
+        data = r.json()
+
+        return len(data) > 0
+
+    except Exception as e:
+
+        print("Duplicate check failed:", e)
+        return False
+
+
+# -------------------------------------------------
 # SAVE SIGNAL
 # -------------------------------------------------
 
 def save_signal(signal):
 
-    r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/signals",
-        headers=headers,
-        json=signal
-    )
+    signal = sanitize_signal(signal)
 
-    if r.status_code not in [200, 201]:
-        print("Insert failed:", r.text)
+    if "url" not in signal or "title" not in signal:
+        return
+
+    if is_duplicate(signal["url"]):
+        print("Duplicate skipped:", signal["url"])
+        return
+
+    try:
+
+        r = session.post(
+            f"{SUPABASE_URL}/rest/v1/signals",
+            headers=headers,
+            json=signal,
+            timeout=15
+        )
+
+        if r.status_code in [200, 201]:
+            print("Inserted:", signal["title"][:60])
+
+        else:
+            print("Insert failed:", r.text)
+
+    except Exception as e:
+
+        print("Insert error:", e)
 
 
 # -------------------------------------------------
@@ -66,7 +168,13 @@ def load_sources():
                 f"agents.data_sources.{module_name}"
             )
 
-            modules.append(module)
+            if hasattr(module, "fetch"):
+
+                modules.append(module)
+
+            else:
+
+                print("Skipped (no fetch function):", module_name)
 
         except Exception as e:
 
@@ -92,9 +200,15 @@ def run_sources():
 
         try:
 
+            print("\nRunning source:", m.__name__)
+
             signals = m.fetch()
 
-            print(m.__name__, "signals:", len(signals))
+            if not signals:
+                print("No signals returned")
+                continue
+
+            print("Signals fetched:", len(signals))
 
             for s in signals:
 
@@ -107,7 +221,7 @@ def run_sources():
             print("Source failed:", m.__name__)
             print(e)
 
-    print("Total signals inserted:", total)
+    print("\nTotal signals processed:", total)
 
 
 # -------------------------------------------------
@@ -116,11 +230,13 @@ def run_sources():
 
 def main():
 
+    print("================================")
     print("Running Trend Scanner")
+    print("================================")
 
     run_sources()
 
-    print("Trend scanning finished")
+    print("\nTrend scanning finished")
 
 
 if __name__ == "__main__":
