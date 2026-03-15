@@ -3,241 +3,162 @@ import requests
 import json
 import time
 import re
+from pathlib import Path
 
+# =====================================
+# CONFIG & ENV (Prinsip 3 & 9)
+# =====================================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 BATCH_SIZE = 20
 
+# Daftar model free terbaru untuk redundansi (Prinsip 16)
 MODEL_LIST = [
-
-"meta-llama/llama-3.3-70b-instruct:free",
-"openai/gpt-oss-120b:free",
-"google/gemma-3-27b-it:free",
-"mistralai/mistral-small-3.1-24b-instruct:free",
-"arcee-ai/trinity-large-preview:free",
-"arcee-ai/trinity-mini:free",
-"z-ai/glm-4.5-air:free",
-"nvidia/nemotron-3-nano-30b-a3b:free",
-"qwen/qwen3-next-80b-a3b-instruct:free",
-"qwen/qwen3-coder:free",
-"openai/gpt-oss-20b:free",
-"nousresearch/hermes-3-llama-3.1-405b:free",
-"google/gemma-3-12b-it:free",
-"google/gemma-3-4b-it:free",
-"google/gemma-3n-e4b-it:free",
-"google/gemma-3n-e2b-it:free",
-"meta-llama/llama-3.2-3b-instruct:free",
-"qwen/qwen3-4b:free",
-"liquid/lfm-2.5-1.2b-instruct:free",
-"liquid/lfm-2.5-1.2b-thinking:free"
-
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "google/gemma-3-12b-it:free",
+    "qwen/qwen-turbo-latest:free"
 ]
 
 headers = {
-"apikey": SUPABASE_KEY,
-"Authorization": f"Bearer {SUPABASE_KEY}",
-"Content-Type": "application/json"
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=minimal"
 }
 
-
 # =====================================
-# FETCH IDEAS
+# FETCH DATA (Alignment dengan Skema Baru)
 # =====================================
-
-def fetch_ideas():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?problem=is.null&select=id,idea&limit={BATCH_SIZE}"
-
-    r = requests.get(url, headers=headers)
-
-    if r.status_code != 200:
-        print("Fetch error:", r.text)
-        return []
-
-    return r.json()
-
-
-# =====================================
-# DISCOVER FREE MODELS
-# =====================================
-
-def discover_models():
-
+def fetch_tasks():
+    # Karena kolom 'idea' tidak ada, kita mencari record yang 'solution'-nya masih kosong 
+    # untuk diproses berdasarkan input di kolom 'problem'
+    url = f"{SUPABASE_URL}/rest/v1/ideas?solution=is.null&select=id,problem&limit={BATCH_SIZE}"
+    
     try:
-
-        r = requests.get("https://openrouter.ai/api/v1/models")
-
+        r = requests.get(url, headers=headers)
         if r.status_code != 200:
+            print(f"Fetch error: {r.status_code} - {r.text}")
             return []
-
-        data = r.json()
-
-        models = []
-
-        for m in data["data"]:
-
-            if ":free" in m["id"]:
-
-                if m["id"] not in MODEL_LIST:
-                    models.append(m["id"])
-
-        return models
-
-    except:
-
+        return r.json()
+    except Exception as e:
+        print(f"Connection error during fetch: {e}")
         return []
 
-
 # =====================================
-# CALL AI
+# CALL AI WITH FALLBACK (Prinsip 16)
 # =====================================
-
 def call_ai(prompt):
-
     headers_ai = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory", 
+        "X-Title": "AI Startup Factory Extractor"
     }
 
-    models = MODEL_LIST + discover_models()
-
-    for model in models:
-
-        print("Trying model:", model)
-
+    for model in MODEL_LIST:
+        print(f"Attempting extraction with: {model}")
         payload = {
             "model": model,
-            "messages":[
-                {"role":"user","content":prompt}
-            ],
-            "temperature":0.3
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1, # Rendah agar JSON lebih stabil
+            "response_format": {"type": "json_object"}
         }
 
         try:
-
-            r = requests.post(
-                OPENROUTER_URL,
-                headers=headers_ai,
-                json=payload,
-                timeout=120
-            )
-
-            if r.status_code != 200:
+            r = requests.post(OPENROUTER_URL, headers=headers_ai, json=payload, timeout=60)
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+            elif r.status_code == 429:
+                print("Rate limited, skipping model...")
                 continue
-
-            data = r.json()
-
-            return data["choices"][0]["message"]["content"]
-
         except Exception as e:
-
-            print("Model failed:", model, e)
-
-        time.sleep(2)
-
+            print(f"Model {model} failed: {e}")
+        
+        time.sleep(1)
     return None
 
-
 # =====================================
-# PARSE JSON
+# PARSE & UPDATE (Prinsip 2: SoC)
 # =====================================
-
 def parse_json(text):
-
     try:
-
-        text = text.replace("```json","").replace("```","").strip()
-
+        text = re.sub(r"```json\s?|\s?```", "", text).strip()
         return json.loads(text)
-
     except:
-
         match = re.search(r"\{.*\}", text, re.DOTALL)
-
         if match:
-            try:
-                return json.loads(match.group())
-            except:
-                return None
-
+            try: return json.loads(match.group())
+            except: return None
     return None
 
-
-# =====================================
-# UPDATE IDEA
-# =====================================
-
-def update_idea(idea_id, data):
-
+def update_database(idea_id, data):
+    # Mapping data ke kolom yang benar-benar ada di tabel ideas Anda
     payload = {
         "problem": data.get("problem"),
         "solution": data.get("solution"),
-        "audience": data.get("audience")
+        "audience": data.get("audience"),
+        "market": data.get("market", "Unknown")
     }
 
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
-
-    r = requests.patch(url, json=payload, headers=headers)
-
-    if r.status_code not in [200,204]:
-        print("Update failed:", r.text)
-
+    try:
+        r = requests.patch(url, json=payload, headers=headers)
+        return r.status_code in [200, 204]
+    except Exception as e:
+        print(f"Update error for {idea_id}: {e}")
+        return False
 
 # =====================================
-# MAIN
+# MAIN RUNNER
 # =====================================
-
 def main():
+    print("=== AI Startup Factory: Problem Extractor ===")
+    
+    tasks = fetch_tasks()
+    if not tasks:
+        print("No new tasks found in 'ideas' table.")
+        return
 
-    print("Running Problem Extractor")
+    print(f"Processing {len(tasks)} items...")
 
-    ideas = fetch_ideas()
-
-    print("Ideas fetched:", len(ideas))
-
-    for idea in ideas:
-
-        idea_text = idea["idea"]
+    for item in tasks:
+        # Menggunakan kolom 'problem' sebagai basis deskripsi yang akan diperkaya
+        raw_text = item.get("problem", "") 
+        if not raw_text:
+            continue
 
         prompt = f"""
-Extract structured startup information.
+        Act as a business analyst. Analyze this startup idea and extract structured details.
+        
+        Raw Input: {raw_text}
 
-Idea:
-{idea_text}
+        Return ONLY a JSON object with this exact structure:
+        {{
+            "problem": "detailed problem statement",
+            "solution": "detailed solution description",
+            "audience": "target user persona",
+            "market": "industry category"
+        }}
+        """
 
-Return JSON:
-
-{{
-"problem":"...",
-"solution":"...",
-"audience":"..."
-}}
-"""
-
-        response = call_ai(prompt)
-
-        if not response:
+        ai_response = call_ai(prompt)
+        if not ai_response:
             continue
 
-        parsed = parse_json(response)
-
-        if not parsed:
-            print("JSON parse failed")
-            continue
-
-        update_idea(
-            idea["id"],
-            parsed
-        )
-
-        print("Processed idea:", idea["id"])
-
-        time.sleep(2)
-
+        parsed_data = parse_json(ai_response)
+        if parsed_data:
+            success = update_database(item["id"], parsed_data)
+            if success:
+                print(f"Successfully updated ID: {item['id']}")
+            else:
+                print(f"Failed to update ID: {item['id']}")
+        
+        time.sleep(1) # Etika API
 
 if __name__ == "__main__":
     main()
