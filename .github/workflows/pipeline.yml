@@ -1,163 +1,111 @@
-name: AI Startup Factory Pipeline
+name: AI Startup Discovery Pipeline
 
 on:
-
-  workflow_dispatch:
-
   schedule:
     - cron: "0 */6 * * *"
+  workflow_dispatch:
 
 jobs:
-
-  ai-startup-pipeline:
+  run-pipeline:
 
     runs-on: ubuntu-latest
-
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
 
     steps:
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
 
+      - name: Run data source collectors
+        run: |
+          python agents/reddit_startups.py
+          python agents/reddit_ml.py
+          python agents/reddit_saas.py
+          python agents/github_trending.py
+          python agents/github_issues.py
+          python agents/hackernews.py
+          python agents/techcrunch.py
+          python agents/producthunt.py
+          python agents/devto.py
+          python agents/arxiv_ai.py
+          python agents/arxiv_ml.py
+          python agents/stackoverflow.py
+          python agents/yc_requests.py
 
-      ################################################
-      # DATA SOURCE INGESTION
-      ################################################
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Collect HackerNews signals
-        run: python agents/data_sources/hackernews.py
-
-      - name: Collect Reddit ML signals
-        run: python agents/data_sources/reddit_ml.py
-
-      - name: Collect Reddit SaaS signals
-        run: python agents/data_sources/reddit_saas.py
-
-      - name: Collect Reddit Startup signals
-        run: python agents/data_sources/reddit_startups.py
-
-      - name: Collect GitHub Trending
-        run: python agents/data_sources/github_trending.py
-
-      - name: Collect GitHub Issues
-        run: python agents/data_sources/github_issues.py
-
-      - name: Collect ProductHunt signals
-        run: python agents/data_sources/producthunt.py
-
-      - name: Collect StackOverflow signals
-        run: python agents/data_sources/stackoverflow.py
-
-      - name: Collect TechCrunch signals
-        run: python agents/data_sources/techcrunch.py
-
-      - name: Collect Dev.to signals
-        run: python agents/data_sources/devto.py
-
-      - name: Collect IndieHackers signals
-        run: python agents/data_sources/indiehackers.py
-
-      - name: Collect YC Requests
-        run: python agents/data_sources/yc_requests.py
-
-      - name: Collect ArXiv AI signals
-        run: python agents/data_sources/arxiv_ai.py
-
-      - name: Collect ArXiv ML signals
-        run: python agents/data_sources/arxiv_ml.py
-
-
-      ################################################
-      # TREND SIGNAL PROCESSING
-      ################################################
-
-      - name: Run Trend Scanner
+      - name: Run trend scanner
         run: python agents/trend_scanner/scanner.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-
-      ################################################
-      # PROBLEM EXTRACTION
-      ################################################
-
-      - name: Extract Problems
-        run: python agents/problem_extractor/extractor.py
-
-
-      ################################################
-      # EMBEDDING
-      ################################################
-
-      - name: Generate Embeddings
-        run: python agents/embedding_agent/embedding_agent.py
-
-
-      ################################################
-      # CLUSTER PROBLEMS
-      ################################################
-
-      - name: Cluster Problems
-        run: python agents/idea_clusterer/clusterer.py
-
-
-      ################################################
-      # GENERATE IDEAS
-      ################################################
-
-      - name: Generate Startup Ideas
+      - name: Generate startup ideas
         run: python agents/idea_generator/generator.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
+      - name: Extract problems
+        run: python agents/problem_extractor/extractor.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      ################################################
-      # WRITE FULL IDEA
-      ################################################
+      - name: Generate embeddings
+        run: python agents/embedding_agent/embedding_agent.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Write Startup Concepts
-        run: python agents/idea_writer/writer.py
+      - name: Run semantic deduplicator
+        run: python agents/semantic_deduplicator/semantic_deduplicator.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
+      - name: Cluster ideas
+        run: python agents/idea_clusterer/clusterer.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      ################################################
-      # MARKET ANALYSIS
-      ################################################
-
-      - name: Analyze Market
+      - name: Market analysis
         run: python agents/market_analyzer/analyzer.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-
-      ################################################
-      # TREND MOMENTUM
-      ################################################
-
-      - name: Calculate Trend Momentum
-        run: python agents/trend_momentum/momentum.py
-
-
-      ################################################
-      # GAP DETECTION
-      ################################################
-
-      - name: Detect Opportunity Gaps
-        run: python agents/opportunity_gap_detector/gap_detector.py
-
-
-      ################################################
-      # RANK OPPORTUNITIES
-      ################################################
-
-      - name: Rank Opportunities
+      - name: Rank opportunities
         run: python agents/opportunity_ranker/ranker.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: Calculate trend momentum
+        run: python agents/trend_momentum/momentum.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
+
+      - name: Write opportunity reports
+        run: python agents/idea_writer/writer.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
