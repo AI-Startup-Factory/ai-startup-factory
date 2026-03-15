@@ -6,14 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-pipeline:
 
+# =========================
+# SETUP
+# =========================
+
+  setup:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -21,89 +23,166 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run data source collectors
-        run: |
+
+# =========================
+# SCRAPERS (PARALLEL)
+# =========================
+
+  scrape_reddit:
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+
+      - run: |
           python agents/reddit_startups.py
           python agents/reddit_ml.py
           python agents/reddit_saas.py
-          python agents/github_trending.py
-          python agents/github_issues.py
-          python agents/hackernews.py
-          python agents/techcrunch.py
-          python agents/producthunt.py
-          python agents/devto.py
-          python agents/arxiv_ai.py
-          python agents/arxiv_ml.py
-          python agents/stackoverflow.py
-          python agents/yc_requests.py
-
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Run trend scanner
+
+  scrape_github:
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+
+      - run: |
+          python agents/github_trending.py
+          python agents/github_issues.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+
+  scrape_news:
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+
+      - run: |
+          python agents/techcrunch.py
+          python agents/producthunt.py
+          python agents/devto.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+
+  scrape_research:
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+
+      - run: |
+          python agents/arxiv_ai.py
+          python agents/arxiv_ml.py
+          python agents/stackoverflow.py
+          python agents/yc_requests.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+
+# =========================
+# PROCESSING PIPELINE
+# =========================
+
+  processing:
+    needs:
+      - scrape_reddit
+      - scrape_github
+      - scrape_news
+      - scrape_research
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Trend scanner
         run: python agents/trend_scanner/scanner.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Generate startup ideas
+      - name: Idea generator
         run: python agents/idea_generator/generator.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Extract problems
+      - name: Problem extractor
         run: python agents/problem_extractor/extractor.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Generate embeddings
+      - name: Embedding agent
         run: python agents/embedding_agent/embedding_agent.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Run semantic deduplicator
+      - name: Semantic deduplicator
         run: python agents/semantic_deduplicator/semantic_deduplicator.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Cluster ideas
+      - name: Idea clusterer
         run: python agents/idea_clusterer/clusterer.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Market analysis
+      - name: Market analyzer
         run: python agents/market_analyzer/analyzer.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
-      - name: Rank opportunities
+      - name: Opportunity ranker
         run: python agents/opportunity_ranker/ranker.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: Calculate trend momentum
+      - name: Trend momentum
         run: python agents/trend_momentum/momentum.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
 
-      - name: Write opportunity reports
+      - name: Opportunity writer
         run: python agents/idea_writer/writer.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
