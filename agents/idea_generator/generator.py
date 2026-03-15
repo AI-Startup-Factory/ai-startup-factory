@@ -3,7 +3,9 @@ import requests
 import re
 import random
 import time
+from pathlib import Path
 
+# Config & Env
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
@@ -11,356 +13,184 @@ SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Prefer": "return=minimal"
 }
 
 # ================================
-# MODEL POOL (large fallback list)
+# MODEL POOL (Large Fallback List)
 # ================================
-
 MODEL_LIST = [
-"stepfun/step-3.5-flash:free",
-"arcee-ai/trinity-large-preview:free",
-"z-ai/glm-4.5-air:free",
-"nvidia/nemotron-3-nano-30b-a3b:free",
-"arcee-ai/trinity-mini:free",
-"nvidia/nemotron-nano-9b-v2:free",
-"nvidia/nemotron-nano-12b-v2-vl:free",
-"openai/gpt-oss-120b:free",
-"meta-llama/llama-3.3-70b-instruct:free",
-"qwen/qwen3-coder:free",
-"qwen/qwen3-next-80b-a3b-instruct:free",
-"openai/gpt-oss-20b:free",
-"liquid/lfm-2.5-1.2b-thinking:free",
-"google/gemma-3-27b-it:free",
-"liquid/lfm-2.5-1.2b-instruct:free",
-"mistralai/mistral-small-3.1-24b-instruct:free",
-"cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-"qwen/qwen3-4b:free",
-"meta-llama/llama-3.2-3b-instruct:free",
-"nousresearch/hermes-3-llama-3.1-405b:free",
-"google/gemma-3-4b-it:free",
-"google/gemma-3n-e4b-it:free",
-"google/gemma-3-12b-it:free",
-"google/gemma-3n-e2b-it:free"
+    "stepfun/step-3.5-flash:free",
+    "arcee-ai/trinity-large-preview:free",
+    "z-ai/glm-4.5-air:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "arcee-ai/trinity-mini:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "openai/gpt-oss-120b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-coder:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-20b:free",
+    "liquid/lfm-2.5-1.2b-thinking:free",
+    "google/gemma-3-27b-it:free",
+    "liquid/lfm-2.5-1.2b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "qwen/qwen3-4b:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "google/gemma-3-4b-it:free",
+    "google/gemma-3n-e4b-it:free",
+    "google/gemma-3-12b-it:free",
+    "google/gemma-3n-e2b-it:free"
 ]
 
-MAX_SIGNALS = 12
+MAX_SIGNALS = 15
 MAX_IDEAS = 10
-
 
 # ================================
 # LOAD SIGNALS
 # ================================
-
 def load_signals():
-
-    url = f"{SUPABASE_URL}/rest/v1/signals?select=title&limit={MAX_SIGNALS}"
-
+    # Mengambil sinyal yang belum diproses (processed = false)
+    url = f"{SUPABASE_URL}/rest/v1/signals?processed=eq.false&select=id,title&limit={MAX_SIGNALS}"
     r = requests.get(url, headers=SUPABASE_HEADERS)
-
     if r.status_code != 200:
         print("Failed loading signals:", r.text)
         return []
-
     return r.json()
-
 
 # ================================
 # DISCOVER EXTRA FREE MODELS
 # ================================
-
 def discover_free_models():
-
     url = "https://openrouter.ai/api/v1/models"
-
     try:
-
         r = requests.get(url)
-
         if r.status_code != 200:
             return []
-
         models = r.json()["data"]
-
-        discovered = []
-
-        for m in models:
-
-            model_id = m["id"]
-
-            if ":free" in model_id and model_id not in MODEL_LIST:
-                discovered.append(model_id)
-
+        discovered = [m["id"] for m in models if ":free" in m["id"] and m["id"] not in MODEL_LIST]
         return discovered
-
     except:
         return []
 
-
 # ================================
-# CALL AI (robust fallback system)
+# CALL AI (Robust Fallback System)
 # ================================
-
 def call_ai(prompt):
-
     url = "https://openrouter.ai/api/v1/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory",
+        "X-Title": "AI Startup Factory"
     }
 
-    models = MODEL_LIST.copy()
-    random.shuffle(models)
+    combined_models = MODEL_LIST.copy()
+    random.shuffle(combined_models)
+    
+    # Tambahkan discovered models ke akhir antrean jika perlu
+    extra = discover_free_models()
+    random.shuffle(extra)
+    all_models = combined_models + extra
 
-    for model in models:
-
-        print("Trying model:", model)
-
+    for model in all_models:
+        print(f"Trying model: {model}")
         payload = {
             "model": model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.7
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "response_format": {"type": "json_object"} # Memaksa output JSON
         }
-
         try:
-
-            r = requests.post(url, headers=headers, json=payload, timeout=90)
-
-            if r.status_code != 200:
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"]
+            elif r.status_code == 429:
+                print(f"Rate limit hit for {model}, switching...")
                 continue
-
-            data = r.json()
-
-            return data["choices"][0]["message"]["content"]
-
         except:
             continue
-
-    print("Primary models failed — discovering new ones")
-
-    extra_models = discover_free_models()
-    random.shuffle(extra_models)
-
-    for model in extra_models:
-
-        print("Trying discovered model:", model)
-
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.7
-        }
-
-        try:
-
-            r = requests.post(url, headers=headers, json=payload, timeout=90)
-
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-
-            return data["choices"][0]["message"]["content"]
-
-        except:
-            continue
-
     return None
 
-
 # ================================
-# PARSE IDEAS
+# SAVE IDEAS (Aligned with Schema)
 # ================================
-
-def parse_ideas(text):
-
-    ideas = []
-
-    for line in text.split("\n"):
-
-        line = line.strip()
-
-        if re.match(r"^\d+[\.\)]", line):
-
-            idea = re.sub(r"^\d+[\.\)]\s*", "", line)
-
-            ideas.append(idea)
-
-    return ideas
-
-
-# ================================
-# FILTER IDEAS
-# ================================
-
-def filter_ideas(ideas):
-
-    filtered = []
-
-    for idea in ideas:
-
-        idea = idea.strip()
-
-        if len(idea) < 25:
-            continue
-
-        idea = idea.replace('"', "")
-
-        if idea.lower().startswith("build a"):
-            idea = idea[7:]
-
-        if idea not in filtered:
-            filtered.append(idea)
-
-    return filtered[:MAX_IDEAS]
-
-
-# ================================
-# LOAD EXISTING IDEAS
-# ================================
-
-def load_existing_ideas():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=idea"
-
-    r = requests.get(url, headers=SUPABASE_HEADERS)
-
-    if r.status_code != 200:
-        return []
-
-    data = r.json()
-
-    return [x["idea"].lower() for x in data]
-
-
-# ================================
-# REMOVE DUPLICATES
-# ================================
-
-def remove_duplicates(new_ideas, existing):
-
-    unique = []
-
-    for idea in new_ideas:
-
-        if idea.lower() not in existing:
-            unique.append(idea)
-
-    return unique
-
-
-# ================================
-# SAVE IDEAS
-# ================================
-
-def save_ideas(ideas):
-
+def save_ideas_to_db(ideas_data, signal_ids):
     url = f"{SUPABASE_URL}/rest/v1/ideas"
-
-    for idea in ideas:
-
+    
+    for item in ideas_data:
+        # Menyesuaikan dengan kolom problem dan solution (Bukan 'idea')
         payload = {
-            "idea": idea
+            "problem": item.get("problem"),
+            "solution": item.get("solution"),
+            "market": item.get("market"),
+            "audience": item.get("audience", "General")
         }
-
+        
         r = requests.post(url, headers=SUPABASE_HEADERS, json=payload)
-
-        if r.status_code not in [200, 201]:
-            print("Insert failed:", r.text)
+        if r.status_code in [200, 201]:
+            print(f"Saved: {payload['problem'][:50]}...")
         else:
-            print("Saved idea:", idea)
+            print(f"Insert failed: {r.text}")
 
-
-# ================================
-# GENERATE IDEAS
-# ================================
-
-def generate_ideas(signals):
-
-    if not signals:
-        return []
-
-    headlines = [s["title"] for s in signals]
-
-    print("\nSignals used for idea generation:\n")
-
-    for h in headlines:
-        print("-", h)
-
-    joined = "\n".join(headlines)
-
-    prompt = f"""
-You are a venture capitalist researching emerging technology markets.
-
-Based on the following signals, identify startup opportunities.
-
-Signals:
-{joined}
-
-Rules:
-
-- focus on real problems
-- avoid generic AI ideas
-- focus on emerging markets
-- each idea must describe a real product
-
-Return a numbered list of startup ideas.
-"""
-
-    response = call_ai(prompt)
-
-    if not response:
-        return []
-
-    ideas = parse_ideas(response)
-
-    ideas = filter_ideas(ideas)
-
-    return ideas
-
+    # Mark signals as processed
+    for sid in signal_ids:
+        patch_url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{sid}"
+        requests.patch(patch_url, headers=SUPABASE_HEADERS, json={"processed": True})
 
 # ================================
 # MAIN PIPELINE
 # ================================
+def main():
+    print("--- Starting Idea Generation Pipeline ---")
+    
+    signals = load_signals()
+    if not signals:
+        print("No unprocessed signals found.")
+        return
+
+    signal_titles = [s["title"] for s in signals]
+    signal_ids = [s["id"] for s in signals]
+    
+    print(f"Loaded {len(signal_titles)} signals.")
+
+    prompt = f"""
+    Based on these technology signals:
+    {json_titles if 'json_titles' in locals() else signal_titles}
+
+    Act as a startup founder. Generate {MAX_IDEAS} unique startup concepts.
+    Return ONLY a JSON array of objects with this structure:
+    [
+      {{
+        "problem": "detailed problem description",
+        "solution": "how technology solves it",
+        "market": "industry name",
+        "audience": "target users"
+      }}
+    ]
+    """
+
+    response = call_ai(prompt)
+    if not response:
+        print("Failed to generate ideas after trying all models.")
+        return
+
+    try:
+        # Pembersihan teks jika AI memberikan markdown
+        clean_json = re.sub(r"```json\s?|\s?```", "", response).strip()
+        ideas_data = json.loads(clean_json)
+        
+        if isinstance(ideas_data, dict) and "ideas" in ideas_data:
+            ideas_data = ideas_data["ideas"]
+
+        print(f"Generated {len(ideas_data)} ideas. Saving to database...")
+        save_ideas_to_db(ideas_data, signal_ids)
+        
+    except Exception as e:
+        print(f"Failed to parse AI response: {e}")
+        print("Raw response:", response[:200])
 
 if __name__ == "__main__":
-
-    print("\nLoading signals...\n")
-
-    signals = load_signals()
-
-    print("Signals loaded:", len(signals))
-
-    if not signals:
-        exit()
-
-    ideas = generate_ideas(signals)
-
-    if not ideas:
-        print("No ideas generated")
-        exit()
-
-    print("\nGenerated ideas:\n")
-
-    for i in ideas:
-        print("-", i)
-
-    existing = load_existing_ideas()
-
-    ideas = remove_duplicates(ideas, existing)
-
-    if not ideas:
-        print("\nAll generated ideas already exist")
-        exit()
-
-    print("\nSaving ideas to database...\n")
-
-    save_ideas(ideas)
-
-    print("\nIdea generation pipeline completed\n")
+    import json
+    main()
