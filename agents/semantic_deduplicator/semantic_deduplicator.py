@@ -1,5 +1,8 @@
 import os
 import requests
+import math
+import json
+import time
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
@@ -13,15 +16,22 @@ headers = {
 }
 
 
-# ============================
-# FETCH IDEAS WITH EMBEDDING
-# ============================
+# ==========================================
+# FETCH IDEAS WITH EMBEDDINGS
+# ==========================================
 
 def fetch_ideas():
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,idea,problem_embedding&problem_embedding=not.is.null"
+    url = f"{SUPABASE_URL}/rest/v1/ideas"
 
-    r = requests.get(url, headers=headers)
+    params = {
+        "select": "id,problem,problem_embedding,is_duplicate",
+        "problem_embedding": "not.is.null",
+        "is_duplicate": "eq.false",
+        "limit": 5000
+    }
+
+    r = requests.get(url, headers=headers, params=params)
 
     if r.status_code != 200:
         print("Fetch error:", r.text)
@@ -30,59 +40,77 @@ def fetch_ideas():
     return r.json()
 
 
-# ============================
+# ==========================================
+# VECTOR PARSER
+# ==========================================
+
+def parse_vector(v):
+
+    if v is None:
+        return None
+
+    if isinstance(v, list):
+        return v
+
+    try:
+        v = v.strip("[]")
+        return [float(x) for x in v.split(",")]
+    except:
+        return None
+
+
+# ==========================================
 # COSINE SIMILARITY
-# ============================
+# ==========================================
 
 def cosine_similarity(a, b):
 
+    if len(a) != len(b):
+        return 0
+
     dot = sum(x*y for x, y in zip(a, b))
 
-    norm_a = sum(x*x for x in a) ** 0.5
-    norm_b = sum(x*x for x in b) ** 0.5
+    norm_a = math.sqrt(sum(x*x for x in a))
+    norm_b = math.sqrt(sum(x*x for x in b))
+
+    if norm_a == 0 or norm_b == 0:
+        return 0
 
     return dot / (norm_a * norm_b)
 
 
-# ============================
-# PARSE PGVECTOR
-# ============================
-
-def parse_vector(v):
-
-    v = v.strip("[]")
-
-    return [float(x) for x in v.split(",")]
-
-
-# ============================
+# ==========================================
 # MARK DUPLICATE
-# ============================
+# ==========================================
 
-def mark_duplicate(idea_id, original_id):
+def mark_duplicate(duplicate_id, original_id):
 
     payload = {
         "is_duplicate": True,
         "duplicate_of": original_id
     }
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
+    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{duplicate_id}"
 
     r = requests.patch(url, headers=headers, json=payload)
 
     if r.status_code in [200, 204]:
-        print("Marked duplicate:", idea_id)
+        print(f"Duplicate {duplicate_id} -> {original_id}")
     else:
         print("Update failed:", r.text)
 
 
-# ============================
+# ==========================================
 # MAIN ENGINE
-# ============================
+# ==========================================
 
 def main():
 
+    print("Running Semantic Deduplicator")
+
     ideas = fetch_ideas()
+
+    print("Ideas fetched:", len(ideas))
 
     if len(ideas) < 2:
         print("Not enough ideas")
@@ -92,35 +120,52 @@ def main():
 
     for i in ideas:
 
-        vectors[i["id"]] = parse_vector(i["problem_embedding"])
+        vec = parse_vector(i.get("problem_embedding"))
+
+        if vec:
+            vectors[i["id"]] = vec
+
+    ids = list(vectors.keys())
 
     checked = set()
 
-    for idea_a in ideas:
+    duplicates = 0
 
-        id_a = idea_a["id"]
+    for i in range(len(ids)):
+
+        id_a = ids[i]
 
         if id_a in checked:
             continue
 
         vec_a = vectors[id_a]
 
-        for idea_b in ideas:
+        for j in range(i+1, len(ids)):
 
-            id_b = idea_b["id"]
+            id_b = ids[j]
 
-            if id_a == id_b:
+            if id_b in checked:
                 continue
 
             vec_b = vectors[id_b]
 
             sim = cosine_similarity(vec_a, vec_b)
 
-            if sim > SIMILARITY_THRESHOLD:
+            if sim >= SIMILARITY_THRESHOLD:
 
                 mark_duplicate(id_b, id_a)
 
+                checked.add(id_b)
+
+                duplicates += 1
+
         checked.add(id_a)
+
+        if i % 50 == 0:
+            print("Progress:", i, "/", len(ids))
+
+    print("Total duplicates:", duplicates)
+    print("Semantic deduplication finished")
 
 
 if __name__ == "__main__":
