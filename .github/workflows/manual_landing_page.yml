@@ -1,38 +1,57 @@
 name: Manual Landing Page Generator
 
 on:
-  workflow_dispatch: # Memungkinkan eksekusi manual melalui tombol "Run workflow" di GitHub Actions
+  workflow_dispatch: # Memungkinkan eksekusi manual dari tab Actions di GitHub
 
 jobs:
-  build-landing-page:
+  generate-web-assets:
     runs-on: ubuntu-latest
     
+    # Environment global agar konsisten dengan agen lainnya
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
     steps:
+      # -------------------------------------------------
+      # PREPARATION
+      # -------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip' # Mempercepat run berikutnya dengan caching
+          python-version: "3.11"
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          # Hanya menginstal requirements yang diperlukan untuk menghemat waktu
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
 
-      - name: Run Landing Page Script
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        # Memastikan script dijalankan sebagai modul sesuai struktur folder Anda
-        run: python -m agents.web_generator.landing_page_gen
+      # -------------------------------------------------
+      # EXECUTION
+      # -------------------------------------------------
+      - name: Run Landing Page Generator
+        run: |
+          echo "🎨 Starting generation for Top 5 Startup Concepts..."
+          python -m agents.web_generator.landing_page_gen
 
-      - name: Upload Landing Pages as Artifact
+      # -------------------------------------------------
+      # ARTIFACT HANDLING
+      # -------------------------------------------------
+      - name: Upload Generated Pages
         uses: actions/upload-artifact@v4
         with:
-          name: top-5-landing-pages
+          name: startup-landing-pages-bundle
           path: dist/
-          retention-days: 7
-          if-no-files-found: error # Memberikan peringatan jika folder dist kosong
+          retention-days: 5 # Cukup 5 hari untuk review manual
+          if-no-files-found: error
+
+      - name: Success Notification
+        run: |
+          echo "✅ Generation complete!"
+          echo "📍 You can download the HTML files from the 'Artifacts' section of this run."
