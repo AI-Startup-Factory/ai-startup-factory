@@ -1,243 +1,105 @@
-import os
 import sys
 import importlib
-import requests
+import time
 from pathlib import Path
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+# Import infrastruktur core
+from core.config import settings
+from core.database import db
 
-
-# -------------------------------------------------
-# FIX PYTHONPATH (IMPORTANT FOR GITHUB ACTIONS)
-# -------------------------------------------------
-
+# Inisialisasi Path untuk dynamic importing
 ROOT_DIR = Path(__file__).resolve().parents[2]
-sys.path.append(str(ROOT_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
-
-# -------------------------------------------------
-# ENV
-# -------------------------------------------------
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("Missing SUPABASE environment variables")
-    sys.exit(1)
-
-
-# -------------------------------------------------
-# HTTP SESSION WITH RETRY
-# -------------------------------------------------
-
-session = requests.Session()
-
-retries = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504],
-)
-
-session.mount("https://", HTTPAdapter(max_retries=retries))
-
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
-
-
-# -------------------------------------------------
-# VALID SIGNAL FIELDS (SCHEMA SAFE)
-# -------------------------------------------------
-
-VALID_FIELDS = {
-    "source",
-    "title",
-    "url",
-    "created_at"
-}
-
-
-# -------------------------------------------------
-# CLEAN SIGNAL PAYLOAD
-# -------------------------------------------------
+# Schema safe fields
+VALID_FIELDS = {"source", "title", "url", "created_at", "content"}
 
 def sanitize_signal(signal):
+    """Membersihkan payload signal agar sesuai dengan skema DB."""
+    return {k: v for k, v in signal.items() if k in VALID_FIELDS and v}
 
-    clean = {}
-
-    for k, v in signal.items():
-
-        if k in VALID_FIELDS and v:
-
-            clean[k] = v
-
-    return clean
-
-
-# -------------------------------------------------
-# CHECK DUPLICATE URL
-# -------------------------------------------------
-
-def is_duplicate(url):
-
-    try:
-
-        r = session.get(
-            f"{SUPABASE_URL}/rest/v1/signals",
-            headers=headers,
-            params={
-                "select": "id",
-                "url": f"eq.{url}",
-                "limit": 1
-            },
-            timeout=10
-        )
-
-        if r.status_code != 200:
-            return False
-
-        data = r.json()
-
-        return len(data) > 0
-
-    except Exception as e:
-
-        print("Duplicate check failed:", e)
-        return False
-
-
-# -------------------------------------------------
-# SAVE SIGNAL
-# -------------------------------------------------
+def is_new_signal(url):
+    """Mengecek apakah URL signal sudah pernah diproses sebelumnya."""
+    # Menggunakan db wrapper untuk cek keberadaan record
+    result = db.fetch_records("signals", f"url=eq.{url}&select=id&limit=1")
+    return len(result) == 0
 
 def save_signal(signal):
+    """Validasi, de-duplikasi, dan simpan signal ke database."""
+    clean_data = sanitize_signal(signal)
+    
+    if "url" not in clean_data or "title" not in clean_data:
+        return False
 
-    signal = sanitize_signal(signal)
+    if not is_new_signal(clean_data["url"]):
+        print(f"⏩ Duplicate skipped: {clean_data['url']}")
+        return False
 
-    if "url" not in signal or "title" not in signal:
-        return
+    # Insert ke tabel signals
+    # Default 'processed' = False agar bisa diambil oleh generator.py nanti
+    clean_data["processed"] = False 
+    
+    success = db.insert_record("signals", clean_data)
+    if success:
+        print(f"✅ Ingested: {clean_data['title'][:60]}...")
+    return success
 
-    if is_duplicate(signal["url"]):
-        print("Duplicate skipped:", signal["url"])
-        return
-
-    try:
-
-        r = session.post(
-            f"{SUPABASE_URL}/rest/v1/signals",
-            headers=headers,
-            json=signal,
-            timeout=15
-        )
-
-        if r.status_code in [200, 201]:
-            print("Inserted:", signal["title"][:60])
-
-        else:
-            print("Insert failed:", r.text)
-
-    except Exception as e:
-
-        print("Insert error:", e)
-
-
-# -------------------------------------------------
-# LOAD DATA SOURCES
-# -------------------------------------------------
-
-def load_sources():
-
+def load_data_sources():
+    """Mencari dan memuat modul scraper secara dinamis dari folder data_sources."""
     modules = []
-
     source_dir = ROOT_DIR / "agents" / "data_sources"
+    
+    if not source_dir.exists():
+        print(f"⚠️ Source directory not found: {source_dir}")
+        return []
 
     for file in source_dir.glob("*.py"):
-
         if file.name == "__init__.py":
             continue
-
-        module_name = file.stem
-
+            
+        module_name = f"agents.data_sources.{file.stem}"
         try:
-
-            module = importlib.import_module(
-                f"agents.data_sources.{module_name}"
-            )
-
+            # Import modul secara dinamis
+            module = importlib.import_module(module_name)
             if hasattr(module, "fetch"):
-
                 modules.append(module)
-
             else:
-
-                print("Skipped (no fetch function):", module_name)
-
+                print(f"⚠️ Skipped {file.name}: No fetch() function found.")
         except Exception as e:
-
-            print("Failed loading source:", module_name)
-            print(e)
-
+            print(f"❌ Failed to load source {module_name}: {e}")
+            
     return modules
 
+def main():
+    print("=== [AGENT] Global Trend Scanner ===")
+    
+    sources = load_data_sources()
+    print(f"📡 Found {len(sources)} active data sources.")
 
-# -------------------------------------------------
-# RUN SOURCES
-# -------------------------------------------------
+    total_new_signals = 0
 
-def run_sources():
-
-    modules = load_sources()
-
-    print("Sources detected:", len(modules))
-
-    total = 0
-
-    for m in modules:
-
+    for source in sources:
+        source_name = source.__name__.split('.')[-1]
+        print(f"\n🔄 Running source: {source_name.upper()}")
+        
         try:
-
-            print("\nRunning source:", m.__name__)
-
-            signals = m.fetch()
-
+            # Eksekusi fungsi fetch() dari masing-masing scraper
+            signals = source.fetch()
+            
             if not signals:
-                print("No signals returned")
+                print(f"📭 No signals found for {source_name}")
                 continue
 
-            print("Signals fetched:", len(signals))
-
+            print(f"📥 Fetched {len(signals)} items. Processing...")
+            
             for s in signals:
-
-                save_signal(s)
-
-                total += 1
-
+                if save_signal(s):
+                    total_new_signals += 1
+                    
         except Exception as e:
+            print(f"❌ Error in source {source_name}: {e}")
 
-            print("Source failed:", m.__name__)
-            print(e)
-
-    print("\nTotal signals processed:", total)
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
-
-def main():
-
-    print("================================")
-    print("Running Trend Scanner")
-    print("================================")
-
-    run_sources()
-
-    print("\nTrend scanning finished")
-
+    print(f"\n=== Scanning Finished: {total_new_signals} new signals added to factory ===")
 
 if __name__ == "__main__":
     main()
