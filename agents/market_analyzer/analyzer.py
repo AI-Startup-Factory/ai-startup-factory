@@ -1,257 +1,121 @@
-import os
 import json
-import requests
 import re
 import time
+import requests
+# Import infrastruktur core
+from core.config import settings
+from core.database import db
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+def load_pending_ideas():
+    """Retrieves ideas that haven't been analyzed for trend strength yet."""
+    query = "trend_strength=is.null&select=id,problem&limit=10"
+    return db.fetch_records("ideas", query)
 
-BATCH_SIZE = 10
-
-MODEL_LIST = [
-"google/gemma-3-27b-it:free",
-"google/gemma-3-12b-it:free",
-"google/gemma-3-4b-it:free",
-"google/gemma-3n-e2b-it:free",
-"mistralai/mistral-small-3.1-24b-instruct:free",
-"nvidia/nemotron-3-nano-30b-a3b:free",
-"nvidia/nemotron-nano-9b-v2:free",
-"qwen/qwen3-4b:free",
-"qwen/qwen3-coder:free",
-"meta-llama/llama-3.3-70b-instruct:free",
-"meta-llama/llama-3.2-3b-instruct:free",
-"liquid/lfm-2.5-1.2b-thinking:free",
-"liquid/lfm-2.5-1.2b-instruct:free",
-"stepfun/step-3.5-flash:free",
-"arcee-ai/trinity-mini:free",
-"z-ai/glm-4.5-air:free",
-"cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
-]
-
-# =========================
-# JSON EXTRACTOR
-# =========================
-
-def extract_json(text):
-
-    try:
-
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-
-        if match:
-            return json.loads(match.group())
-
-    except Exception as e:
-        print("JSON extraction error:", e)
-
-    return None
-
-
-# =========================
-# LOAD IDEAS FROM SUPABASE
-# =========================
-
-def load_ideas():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?trend_strength=is.null&select=id,problem"
-
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-
-    r = requests.get(url, headers=headers)
-
-    if r.status_code != 200:
-        print("Failed to fetch ideas:", r.text)
-        return []
-
-    return r.json()
-
-
-# =========================
-# DISCOVER FREE MODELS
-# =========================
-
-def discover_models():
-
-    print("Checking OpenRouter free models")
-
-    try:
-
-        r = requests.get("https://openrouter.ai/api/v1/models")
-
-        data = r.json()
-
-        models = []
-
-        for m in data["data"]:
-
-            if ":free" in m["id"]:
-
-                if m["id"] not in MODEL_LIST:
-                    models.append(m["id"])
-
-        return models
-
-    except:
-        return []
-
-
-# =========================
-# CALL AI
-# =========================
-
-def call_ai(prompt):
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    models = MODEL_LIST + discover_models()
-
-    for model in models:
-
-        print("Trying model:", model)
-
-        payload = {
-            "model": model,
-            "messages":[
-                {"role":"user","content":prompt}
-            ]
-        }
-
-        try:
-
-            r = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=120
-            )
-
-            if r.status_code != 200:
-                print("Model error:", r.status_code)
-                continue
-
-            data = r.json()
-
-            content = data["choices"][0]["message"]["content"]
-
-            content = content.replace("```json","").replace("```","").strip()
-
-            parsed = extract_json(content)
-
-            if parsed:
-                print("AI success with:", model)
-                return parsed
-
-        except Exception as e:
-
-            print("Model failed:", model, e)
-
-        time.sleep(2)
-
-    return None
-
-
-# =========================
-# UPDATE SUPABASE
-# =========================
-
-def update_idea(idea_id, analysis):
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
-
+def update_idea_analysis(idea_id, analysis):
+    """Updates the idea with market analysis results."""
     payload = {
         "market_size": analysis.get("market_size"),
         "competition": analysis.get("competition"),
         "trend_strength": analysis.get("trend_strength"),
         "success_probability": analysis.get("success_probability")
     }
+    return db.update_record("ideas", idea_id, payload)
 
+def discover_extra_models():
+    """Checks OpenRouter for any new free models not in our static list."""
+    try:
+        r = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            return [m["id"] for m in data if ":free" in m["id"]]
+    except:
+        return []
+    return []
+
+def call_market_ai(prompt):
+    """Executes AI analysis with robust fallback and JSON extraction."""
+    url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory"
     }
 
-    r = requests.patch(url, json=payload, headers=headers)
+    # Merging static core models with dynamic discovery
+    potential_models = list(set(settings.MODELS + discover_extra_models()))
+    
+    for model in potential_models:
+        print(f"🔬 Analyzing market with model: {model}")
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"}
+        }
 
-    print("Updated:", idea_id, r.status_code)
-
-
-# =========================
-# BUILD PROMPT
-# =========================
-
-def build_prompt(ideas):
-
-    problems = [idea["problem"] for idea in ideas]
-
-    prompt = f"""
-Analyze the following startup problems.
-
-Return ONLY JSON array.
-
-Each item must contain:
-
-problem
-market_size
-competition
-trend_strength (1-10)
-success_probability (1-10)
-
-Problems:
-
-{json.dumps(problems, indent=2)}
-"""
-
-    return prompt
-
-
-# =========================
-# MAIN
-# =========================
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=120)
+            if r.status_code == 200:
+                content = r.json()["choices"][0]["message"]["content"]
+                # Cleaning and extraction
+                clean_content = re.sub(r"```json\s?|\s?```", "", content).strip()
+                data = json.loads(clean_content)
+                
+                # Handle both direct array or wrapped object
+                return data.get("analysis", data) if isinstance(data, dict) else data
+            
+            elif r.status_code == 429:
+                print(f"⚠️ Rate limit for {model}. Skipping...")
+        except Exception as e:
+            print(f"❌ Connection error with {model}: {e}")
+        
+        time.sleep(1)
+    return None
 
 def main():
-
-    ideas = load_ideas()
-
+    print("=== AI Startup Factory: Market & Trend Analyzer ===")
+    
+    ideas = load_pending_ideas()
     if not ideas:
-        print("No ideas to analyze")
+        print("✅ All ideas have been analyzed.")
         return
 
-    batch = ideas[:BATCH_SIZE]
+    print(f"📡 Analyzing batch of {len(ideas)} ideas...")
+    
+    problems_list = [i["problem"] for i in ideas]
+    prompt = f"""
+    Analyze the following startup problems for market viability.
+    Return ONLY a JSON object with a key "analysis" containing an array of objects.
 
-    print("Analyzing batch:", len(batch))
+    Each object must have:
+    - problem (original text)
+    - market_size (description)
+    - competition (description)
+    - trend_strength (score 1-10)
+    - success_probability (score 1-10)
 
-    prompt = build_prompt(batch)
+    Problems to analyze:
+    {json.dumps(problems_list, indent=2)}
+    """
 
-    results = call_ai(prompt)
-
+    results = call_market_ai(prompt)
     if not results:
-        print("AI analysis failed")
+        print("❌ Market analysis failed for this batch.")
         return
 
-    problem_map = {idea["problem"]:idea["id"] for idea in batch}
+    # Create mapping for efficient updates
+    problem_to_id = {i["problem"]: i["id"] for i in ideas}
+    success_updates = 0
 
-    for item in results:
+    if isinstance(results, list):
+        for item in results:
+            prob_text = item.get("problem")
+            if prob_text in problem_to_id:
+                idea_id = problem_to_id[prob_text]
+                if update_idea_analysis(idea_id, item):
+                    success_updates += 1
+                    print(f"✅ Analysis saved for ID: {idea_id}")
 
-        problem = item.get("problem")
-
-        if problem not in problem_map:
-            continue
-
-        idea_id = problem_map[problem]
-
-        update_idea(idea_id, item)
-
+    print(f"=== Analysis Completed: {success_updates}/{len(ideas)} updated ===")
 
 if __name__ == "__main__":
     main()
