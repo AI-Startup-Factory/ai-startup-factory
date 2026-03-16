@@ -6,9 +6,9 @@
 
 ## 🏗️ Arsitektur & Alur Kerja
 
-Sistem ini mengikuti prinsip **Modularization** dan **Separation of Concerns (SoC)**, di mana setiap agen memiliki tanggung jawab spesifik dalam satu jalur produksi yang kohesif.
+Sistem ini mengikuti prinsip **Modularization** dan **Separation of Concerns (SoC)**, di mana setiap agen memiliki tanggung jawab spesifik dalam satu jalur produksi:
 
-1.  **Ingestion**: `Trend Scanner` mengumpulkan sinyal mentah dari berbagai sumber (Reddit, GitHub, HackerNews, dll).
+1.  **Ingestion**: `Trend Scanner` memicu berbagai plugin di `data_sources` untuk mengumpulkan sinyal mentah.
 2.  **Synthesis**: `Idea Generator` & `Problem Extractor` mengubah sinyal menjadi entitas bisnis terstruktur.
 3.  **Intelligence**: `Embedding Agent` & `Deduplicator` memastikan data unik dan memiliki representasi vektor untuk analisis semantik.
 4.  **Discovery**: `Clusterer` & `Gap Detector` menemukan pola dan celah peluang pasar yang belum jenuh.
@@ -23,7 +23,8 @@ Sistem ini mengikuti prinsip **Modularization** dan **Separation of Concerns (So
 ├── .github/workflows/       # Automasi Pipeline (Daily, Debug, Manual)
 ├── core/                    # Infrastruktur Inti (Config & DB Wrapper)
 ├── agents/
-│   ├── trend_scanner/       # Ingestor data mentah dari berbagai sumber
+│   ├── data_sources/        # Plugin kolektor data (ArXiv, Reddit, HN, dll)
+│   ├── trend_scanner/       # Orchestrator untuk menjalankan semua data_sources
 │   ├── idea_generator/      # Mesin pembuat benih ide awal
 │   ├── problem_extractor/   # Strukturisasi data (Problem/Solution/Audience)
 │   ├── embedding_agent/     # Pemrosesan vektor (Sentence-Transformers)
