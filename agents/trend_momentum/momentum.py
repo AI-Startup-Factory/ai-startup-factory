@@ -1,304 +1,111 @@
-import os
-import requests
+import math
 import time
 import re
-import math
+import requests
+# Import infrastruktur core
+from core.config import settings
+from core.database import db
 
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-
-# GitHub token dari GitHub Actions secret
-GITHUB_TOKEN = os.getenv("AI_STARTUP_TOKEN")
-
-
+# Konfigurasi API Eksternal
 HN_API = "https://hn.algolia.com/api/v1/search"
 GITHUB_API = "https://api.github.com/search/repositories"
 
-
-REQUEST_TIMEOUT = 30
-
-
-SUPABASE_HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}"
-}
-
-
-GITHUB_HEADERS = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github+json"
-}
-
-
-# ==========================
-# LOAD IDEAS
-# ==========================
-
-def load_ideas():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem"
-
-    r = requests.get(url, headers=SUPABASE_HEADERS)
-
-    if r.status_code != 200:
-        print("Failed loading ideas:", r.text)
-        return []
-
-    return r.json()
-
-
-# ==========================
-# KEYWORD EXTRACTION
-# ==========================
+def fetch_ideas_for_momentum():
+    """Mengambil ide yang perlu divalidasi momentumnya."""
+    # Kita bisa membatasi hanya untuk ide yang belum punya momentum_score
+    query = "select=id,problem&momentum_score=is.null&limit=20"
+    return db.fetch_records("ideas", query)
 
 def extract_keywords(text):
-
+    """Membersihkan teks dan mengambil 3 kata kunci utama untuk pencarian."""
     text = text.lower()
-
     text = re.sub(r"[^a-z0-9\s]", "", text)
-
     words = text.split()
+    
+    stopwords = {
+        "the","and","for","with","that","this","from","into","using","build",
+        "system","platform","software","current","existing","methods","approach",
+        "model","models","data","based","analysis","problem","solution","applications"
+    }
 
-    stopwords = [
-        "the","and","for","with","that","this","from",
-        "into","using","build","system","platform",
-        "software","current","existing","methods",
-        "approach","model","models","data","based",
-        "analysis","problem","solution","applications"
-    ]
-
-    keywords = []
-
-    for w in words:
-
-        if len(w) < 4:
-            continue
-
-        if w in stopwords:
-            continue
-
-        keywords.append(w)
-
+    keywords = [w for w in words if len(w) > 3 and w not in stopwords]
     return " ".join(keywords[:3])
 
+def get_hn_score(query):
+    """Mencari popularitas topik di HackerNews (Points + Comments)."""
+    try:
+        params = {"query": query, "tags": "story", "hitsPerPage": 10}
+        r = requests.get(HN_API, params=params, timeout=20)
+        if r.status_code == 200:
+            hits = r.json().get("hits", [])
+            return sum(h.get("points", 0) + h.get("num_comments", 0) for h in hits)
+    except Exception as e:
+        print(f"⚠️ HN Search Error: {e}")
+    return 0
 
-# ==========================
-# HACKERNEWS MOMENTUM
-# ==========================
-
-def hn_score(query):
+def get_github_score(query):
+    """Mencari aktivitas kode di GitHub (Stars + Forks)."""
+    # Pastikan AI_STARTUP_TOKEN ada di .env atau GitHub Secrets
+    github_token = getattr(settings, "AI_STARTUP_TOKEN", None)
+    headers = {"Accept": "application/vnd.github+json"}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
 
     try:
-
-        params = {
-            "query": query,
-            "tags": "story",
-            "hitsPerPage": 10
-        }
-
-        r = requests.get(
-            HN_API,
-            params=params,
-            timeout=REQUEST_TIMEOUT
-        )
-
-        if r.status_code != 200:
-            print("HN error:", r.text)
-            return 0
-
-        data = r.json()
-
-        hits = data.get("hits", [])
-
-        score = 0
-
-        for h in hits:
-
-            points = h.get("points", 0)
-            comments = h.get("num_comments", 0)
-
-            score += points + comments
-
-        return score
-
+        params = {"q": query, "sort": "stars", "order": "desc", "per_page": 5}
+        r = requests.get(GITHUB_API, headers=headers, params=params, timeout=20)
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+            return sum(item.get("stargazers_count", 0) + item.get("forks_count", 0) for item in items)
     except Exception as e:
-
-        print("HN exception:", e)
-
-        return 0
-
-
-# ==========================
-# GITHUB MOMENTUM
-# ==========================
-
-def github_score(query):
-
-    try:
-
-        params = {
-            "q": query,
-            "sort": "stars",
-            "order": "desc",
-            "per_page": 5
-        }
-
-        r = requests.get(
-            GITHUB_API,
-            headers=GITHUB_HEADERS,
-            params=params,
-            timeout=REQUEST_TIMEOUT
-        )
-
-        if r.status_code != 200:
-            print("GitHub API error:", r.text)
-            return 0
-
-        data = r.json()
-
-        repos = data.get("items", [])
-
-        score = 0
-
-        for repo in repos:
-
-            stars = repo.get("stargazers_count", 0)
-            forks = repo.get("forks_count", 0)
-
-            score += stars + forks
-
-        return score
-
-    except Exception as e:
-
-        print("GitHub exception:", e)
-
-        return 0
-
-
-# ==========================
-# MOMENTUM CALCULATION
-# ==========================
-
-def calculate_momentum(hn, gh):
-
-    hn_component = math.log1p(hn) * 3
-    gh_component = math.log1p(gh) * 2
-
-    momentum = hn_component + gh_component
-
-    return int(momentum)
-
-
-# ==========================
-# VELOCITY NORMALIZATION
-# ==========================
+        print(f"⚠️ GitHub Search Error: {e}")
+    return 0
 
 def normalize_velocity(momentum):
-
-    if momentum > 2000:
-        return 10
-
-    if momentum > 1000:
-        return 9
-
-    if momentum > 500:
-        return 8
-
-    if momentum > 200:
-        return 7
-
-    if momentum > 100:
-        return 6
-
-    if momentum > 50:
-        return 5
-
-    if momentum > 20:
-        return 4
-
-    if momentum > 10:
-        return 3
-
-    if momentum > 5:
-        return 2
-
+    """Mengonversi skor logaritmik momentum ke skala velocity 1-10."""
+    thresholds = [
+        (2000, 10), (1000, 9), (500, 8), (200, 7), (100, 6),
+        (50, 5), (20, 4), (10, 3), (5, 2)
+    ]
+    for limit, val in thresholds:
+        if momentum > limit: return val
     return 1
 
-
-# ==========================
-# UPDATE DATABASE
-# ==========================
-
-def update_db(idea_id, hn, gh, momentum, velocity):
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
-
-    payload = {
-        "hn_score": hn,
-        "github_score": gh,
-        "momentum_score": momentum,
-        "trend_velocity": velocity
-    }
-
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    r = requests.patch(url, json=payload, headers=headers)
-
-    print("Updated:", idea_id, r.status_code)
-
-
-# ==========================
-# MAIN
-# ==========================
-
 def main():
-
-    ideas = load_ideas()
-
+    print("=== [AGENT] Trend & Momentum Analyzer ===")
+    ideas = fetch_ideas_for_momentum()
+    
     if not ideas:
-        print("No ideas found")
+        print("✅ Semua ide sudah memiliki skor momentum.")
         return
 
     for idea in ideas:
-
+        idea_id = idea["id"]
         problem = idea["problem"]
-
-        print("\nAnalyzing:", problem)
-
+        
         keywords = extract_keywords(problem)
+        print(f"\n🔍 Querying momentum for: '{keywords}'")
 
-        print("Keywords:", keywords)
+        hn = get_hn_score(keywords)
+        gh = get_github_score(keywords)
 
-        hn = hn_score(keywords)
-
-        gh = github_score(keywords)
-
-        momentum = calculate_momentum(hn, gh)
-
+        # Kalkulasi Momentum (Logaritmik agar angka jutaan tidak merusak skala)
+        # Log1p(x) = log(1+x)
+        momentum = int((math.log1p(hn) * 3) + (math.log1p(gh) * 2))
         velocity = normalize_velocity(momentum)
 
-        print("HN:", hn)
-        print("GitHub:", gh)
-        print("Momentum:", momentum)
-        print("Velocity:", velocity)
-
-        update_db(
-            idea["id"],
-            hn,
-            gh,
-            momentum,
-            velocity
-        )
-
-        time.sleep(1)
-
+        # Update DB
+        payload = {
+            "hn_score": hn,
+            "github_score": gh,
+            "momentum_score": momentum,
+            "trend_velocity": velocity
+        }
+        
+        if db.update_record("ideas", idea_id, payload):
+            print(f"📈 Updated ID {idea_id}: Momentum={momentum}, Velocity={velocity} (HN:{hn}, GH:{gh})")
+        
+        time.sleep(1) # Etika API
 
 if __name__ == "__main__":
-
     main()
