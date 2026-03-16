@@ -1,13 +1,12 @@
 name: AI Startup Factory Debug Pipeline
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Hanya dijalankan manual untuk testing/audit
 
 jobs:
   debug-pipeline:
     runs-on: ubuntu-latest
 
-    # Global Environment: Mengatur context sekali untuk semua steps
     env:
       PYTHONPATH: ${{ github.workspace }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -16,81 +15,81 @@ jobs:
       AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
 
     steps:
-      # =========================
-      # PREPARATION
-      # =========================
-      - name: Checkout repository
+      # -------------------------------------------------
+      # 1. INTEGRITY CHECK
+      # -------------------------------------------------
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Debug python syntax
+      - name: Lint & Syntax Check
         run: |
-          echo "===== PYTHON SYNTAX CHECK ====="
-          python -m compileall agents
+          echo "===== STARTING SYNTAX AUDIT ====="
+          python -m compileall core agents
+          echo "✅ All Python files are syntactically valid."
 
-      # =========================
-      # DATA SOURCE AGENTS
-      # =========================
-      - name: Run Data Source Agents
+      # -------------------------------------------------
+      # 2. DATA LAYER DEBUGGING
+      # -------------------------------------------------
+      - name: Test Trend Scanning & Ingestion
         run: |
-          python -m agents.data_sources.reddit_startups
-          python -m agents.data_sources.reddit_ml
-          python -m agents.data_sources.reddit_saas
-          python -m agents.data_sources.github_trending
-          python -m agents.data_sources.github_issues
-          python -m agents.data_sources.hackernews
-          python -m agents.data_sources.techcrunch
-          python -m agents.data_sources.producthunt
-          python -m agents.data_sources.devto
-          python -m agents.data_sources.arxiv_ai
-          python -m agents.data_sources.arxiv_ml
-          python -m agents.data_sources.stackoverflow
-          python -m agents.data_sources.yc_requests
-
-      # =========================
-      # PROCESSING PIPELINE
-      # =========================
-      - name: Run Trend & Idea Processing
-        run: |
+          echo "🔍 Testing Core Ingestion..."
           python -m agents.trend_scanner.scanner
+        # Kita tidak meng-hardcode data_sources di sini agar tetap modular
+
+      # -------------------------------------------------
+      # 3. AI & LOGIC DEBUGGING
+      # -------------------------------------------------
+      - name: Test Idea Engine
+        run: |
           python -m agents.idea_generator.generator
           python -m agents.problem_extractor.extractor
 
-      - name: Run Embedding & Deduplication
+      - name: Test Vector & Intelligence Layer
         run: |
           python -m agents.embedding_agent.embedding_agent
           python -m agents.semantic_deduplicator.semantic_deduplicator
 
-      - name: Run Clustering & Market Analysis
+      - name: Test Discovery & Analysis
         run: |
-          python -m agents.idea_clusterer.clusterer
+          python -m agents.clusterer.clusterer
           python -m agents.market_analyzer.analyzer
-
-      # =========================
-      # OPPORTUNITY & STRATEGY
-      # =========================
-      - name: Run Opportunity Discovery & Scoring
-        run: |
           python -m agents.opportunity_discovery.vector_discovery
+
+      # -------------------------------------------------
+      # 4. SCORING & PRODUCTION DEBUGGING
+      # -------------------------------------------------
+      - name: Test Ranking & Blueprint Gen
+        run: |
           python -m agents.opportunity_gap_detector.gap_detector
           python -m agents.opportunity_scorer.scorer
           python -m agents.opportunity_ranker.ranker
-
-      - name: Run Startup Generation & Momentum
-        run: |
           python -m agents.startup_generator.startup_blueprint_generator
-          python -m agents.trend_momentum.momentum
-          python -m agents.idea_writer.writer
 
-      - name: Debug pipeline finished
-        run: echo "Debug pipeline completed successfully"
+      - name: Test Web & Momentum
+        run: |
+          python -m agents.trend_momentum.momentum
+          python -m agents.web_generator.landing_page_gen
+
+      # -------------------------------------------------
+      # 5. DIAGNOSTICS
+      # -------------------------------------------------
+      - name: Environment Diagnostics
+        run: |
+          echo "===== PIPELINE DIAGNOSTICS ====="
+          echo "Python version: $(python --version)"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "Checking Supabase connection..."
+          curl -s -o /dev/null -w "%{http_code}" "$SUPABASE_URL/rest/v1/" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY"
+          echo " - Database ping (200/404 is good, 000 is bad)"
