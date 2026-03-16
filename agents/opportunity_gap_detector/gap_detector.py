@@ -1,192 +1,112 @@
-import os
-import requests
-import numpy as np
-from collections import defaultdict
+import math
+# Import core infrastructure
+from core.config import settings
+from core.database import db
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
+def fetch_ideas_for_scoring():
+    """Retrieves all ideas with necessary metadata for opportunity scoring."""
+    query = "select=id,cluster_id,cluster_size,trend_strength,market_size,competition"
+    return db.fetch_records("ideas", query)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("Missing environment variables")
-    exit(1)
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
-
-
-# -----------------------------
-# FETCH IDEAS
-# -----------------------------
-def fetch_ideas():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,cluster_id,cluster_size,trend_strength,market_size,competition"
-
-    r = requests.get(url, headers=headers)
-
-    if r.status_code != 200:
-        print("Fetch error:", r.text)
-        return []
-
-    data = r.json()
-
-    print("Fetched ideas:", len(data))
-
-    return data
-
-
-# -----------------------------
-# MARKET SIZE NORMALIZATION
-# -----------------------------
-def normalize_market_size(v):
-
-    if not v:
-        return 0.5
-
-    v = str(v).lower()
-
-    if "trillion" in v:
-        return 1.0
-
-    if "billion" in v:
-        return 0.8
-
-    if "million" in v:
-        return 0.5
-
+def normalize_market_size(value):
+    """Translates market size descriptions into a numerical weight (0.0 - 1.0)."""
+    if not value: return 0.5
+    v = str(value).lower()
+    if "trillion" in v: return 1.0
+    if "billion" in v: return 0.8
+    if "million" in v: return 0.5
     return 0.3
 
-
-# -----------------------------
-# COMPETITION NORMALIZATION
-# -----------------------------
-def normalize_competition(v):
-
-    if not v:
-        return 0.5
-
-    v = str(v).lower()
-
-    if "high" in v:
-        return 0.2
-
-    if "medium" in v:
-        return 0.5
-
-    if "low" in v:
-        return 0.8
-
+def normalize_competition(value):
+    """Translates competition levels into an inverse weight (Low = High Opportunity)."""
+    if not value: return 0.5
+    v = str(value).lower()
+    if "high" in v: return 0.2
+    if "medium" in v: return 0.5
+    if "low" in v: return 0.8
     return 0.5
 
+def calculate_mean(data_list):
+    """Calculates the average of a list, returns 0 if list is empty."""
+    if not data_list: return 0
+    return sum(data_list) / len(data_list)
 
-# -----------------------------
-# UPDATE IDEA
-# -----------------------------
-def update_row(row_id, density, momentum, score):
-
+def update_opportunity_metrics(row_id, density, momentum, score):
+    """Persists calculated scores back to the database."""
     payload = {
-        "cluster_density": density,
-        "cluster_momentum": momentum,
-        "cluster_opportunity_score": score,
-        "opportunity_gap_score": int(score * 100)
+        "cluster_density": float(density),
+        "cluster_momentum": float(momentum),
+        "cluster_opportunity_score": float(score),
+        "opportunity_gap_score": int(score * 100) # Percentage-based score for ranking
     }
+    return db.update_record("ideas", row_id, payload)
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{row_id}"
-
-    r = requests.patch(url, headers=headers, json=payload)
-
-    if r.status_code in [200, 204]:
-        print("Updated opportunity:", row_id)
-    else:
-        print("Update failed:", r.text)
-
-
-# -----------------------------
-# MAIN ANALYSIS
-# -----------------------------
 def main():
-
-    ideas = fetch_ideas()
-
+    print("=== AI Startup Factory: Opportunity Gap Detector ===")
+    
+    # 1. Fetch data
+    ideas = fetch_ideas_for_scoring()
     if not ideas:
-        print("No ideas found")
+        print("❌ No ideas found to analyze. Ensure Clusterer and Analyzer have run.")
         return
 
-    clusters = defaultdict(list)
-
+    # 2. Grouping by Cluster
+    clusters = {}
     for i in ideas:
-
         cid = i.get("cluster_id")
-
-        if cid is None:
-            continue
-
+        if cid is None: continue
+        if cid not in clusters: clusters[cid] = []
         clusters[cid].append(i)
 
-    print("Clusters detected:", len(clusters))
+    print(f"📡 Analyzing {len(clusters)} clusters...")
 
-    cluster_scores = {}
-
+    # 3. Cluster Scoring Logic
+    cluster_metrics = {}
     for cid, rows in clusters.items():
-
         size = len(rows)
-
+        
+        # Density: High density (many ideas) reduces 'gap' opportunity
+        # Formula: Cap at 20 ideas for max density
         density = min(1.0, size / 20)
 
-        trend_values = [
-            r.get("trend_strength", 0) or 0
-            for r in rows
-        ]
+        # Momentum: Based on AI-generated trend_strength
+        trend_values = [float(r.get("trend_strength") or 3) for r in rows]
+        momentum = calculate_mean(trend_values) / 10 # Normalize 1-10 scale to 0.1-1.0
 
-        momentum = np.mean(trend_values) / 100 if trend_values else 0.3
+        # Market & Competition Weights
+        market_scores = [normalize_market_size(r.get("market_size")) for r in rows]
+        market_score = calculate_mean(market_scores)
 
-        market_scores = [
-            normalize_market_size(r.get("market_size"))
-            for r in rows
-        ]
+        comp_scores = [normalize_competition(r.get("competition")) for r in rows]
+        competition_score = calculate_mean(comp_scores)
 
-        market_score = np.mean(market_scores)
-
-        competition_scores = [
-            normalize_competition(r.get("competition"))
-            for r in rows
-        ]
-
-        competition_score = np.mean(competition_scores)
-
-        opportunity = (
+        # FINAL FORMULA (Weighted Average)
+        # 35% Gap (1-Density), 25% Trend, 25% Market Size, 15% Low Competition
+        opportunity_score = (
             (1 - density) * 0.35 +
             momentum * 0.25 +
             market_score * 0.25 +
             competition_score * 0.15
         )
 
-        cluster_scores[cid] = {
+        cluster_metrics[cid] = {
             "density": density,
             "momentum": momentum,
-            "score": opportunity
+            "score": opportunity_score
         }
 
+    # 4. Batch Update Results
+    print(f"💾 Syncing opportunity scores to database...")
+    success_count = 0
     for i in ideas:
-
         cid = i.get("cluster_id")
+        if cid not in cluster_metrics: continue
+        
+        metrics = cluster_metrics[cid]
+        if update_opportunity_metrics(i["id"], metrics["density"], metrics["momentum"], metrics["score"]):
+            success_count += 1
 
-        if cid not in cluster_scores:
-            continue
-
-        s = cluster_scores[cid]
-
-        update_row(
-            i["id"],
-            s["density"],
-            s["momentum"],
-            s["score"]
-        )
-
-    print("Opportunity analysis complete")
-
+    print(f"✅ Scoring complete. {success_count} ideas updated with Opportunity Scores.")
 
 if __name__ == "__main__":
     main()
