@@ -1,16 +1,16 @@
-name: AI Startup Factory Pipeline
+name: AI Startup Factory Production Pipeline
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Memungkinkan eksekusi manual dari dashboard GitHub
   schedule:
-    # Berjalan setiap 6 jam untuk menjaga aliran data startup
+    # Berjalan setiap 6 jam (4 kali sehari)
     - cron: "0 */6 * * *"
 
 jobs:
-  run-pipeline:
+  factory-production:
     runs-on: ubuntu-latest
-
-    # Global Environment: Efisiensi agar tidak menulis env di setiap step
+    
+    # Global Environment: Menggunakan Secrets untuk keamanan
     env:
       PYTHONPATH: ${{ github.workspace }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -19,94 +19,87 @@ jobs:
       AI_STARTUP_TOKEN: ${{ secrets.AI_STARTUP_TOKEN }}
 
     steps:
-      # =========================
+      # -------------------------------------------------
       # PREPARATION
-      # =========================
-      - name: Checkout repository
+      # -------------------------------------------------
+      - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip' # Mempercepat run berikutnya
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # =========================
-      # DATA COLLECTION (Signals)
-      # =========================
-      - name: Run Data Source Agents
-        run: |
-          python -m agents.data_sources.reddit_startups
-          python -m agents.data_sources.reddit_ml
-          python -m agents.data_sources.reddit_saas
-          python -m agents.data_sources.github_trending
-          python -m agents.data_sources.github_issues
-          python -m agents.data_sources.hackernews
-          python -m agents.data_sources.techcrunch
-          python -m agents.data_sources.producthunt
-          python -m agents.data_sources.devto
-          python -m agents.data_sources.arxiv_ai
-          python -m agents.data_sources.arxiv_ml
-          python -m agents.data_sources.stackoverflow
-          python -m agents.data_sources.yc_requests
-
-      - name: Run Trend Scanner
+      # -------------------------------------------------
+      # STAGE 1: INGESTION (Trend Scanning)
+      # -------------------------------------------------
+      - name: Run Trend Scanner (Multi-Source)
+        # Scanner secara otomatis memuat plugin dari agents/data_sources/
         run: python -m agents.trend_scanner.scanner
+        continue-on-error: true
 
-      # =========================
-      # IDEA PROCESSING (The Core)
-      # =========================
-      - name: Generate Startup Ideas
-        run: python -m agents.idea_generator.generator
-
-      - name: Extract & Enrich Problems
-        run: python -m agents.problem_extractor.extractor
-
-      # =========================
-      # VECTOR INTELLIGENCE (Crucial Fix)
-      # =========================
-      - name: Generate Embeddings
-        run: python -m agents.embedding_agent.embedding_agent
-
-      - name: Semantic Deduplication
-        run: python -m agents.semantic_deduplicator.semantic_deduplicator
-
-      # =========================
-      # ANALYSIS & CLUSTERING
-      # =========================
-      - name: Idea Clustering & Market Analysis
+      # -------------------------------------------------
+      # STAGE 2: PROCESSING (Idea & Extraction)
+      # -------------------------------------------------
+      - name: Core Idea Processing
         run: |
-          python -m agents.idea_clusterer.clusterer
+          python -m agents.idea_generator.generator
+          python -m agents.problem_extractor.extractor
+
+      # -------------------------------------------------
+      # STAGE 3: INTELLIGENCE (Vectors & Quality)
+      # -------------------------------------------------
+      - name: Vector Intelligence & Deduplication
+        run: |
+          python -m agents.embedding_agent.embedding_agent
+          python -m agents.semantic_deduplicator.semantic_deduplicator
+
+      # -------------------------------------------------
+      # STAGE 4: CLUSTERING & ANALYSIS
+      # -------------------------------------------------
+      - name: Market Analysis & Discovery
+        run: |
+          python -m agents.clusterer.clusterer
           python -m agents.market_analyzer.analyzer
-
-      - name: Opportunity Discovery & Gap Detection
-        run: |
           python -m agents.opportunity_discovery.vector_discovery
-          python -m agents.opportunity_gap_detector.gap_detector
 
-      # =========================
-      # SCORING & RANKING
-      # =========================
-      - name: Score & Rank Opportunities
+      # -------------------------------------------------
+      # STAGE 5: EVALUATION (Scoring & Gaps)
+      # -------------------------------------------------
+      - name: Opportunity Evaluation
         run: |
+          python -m agents.opportunity_gap_detector.gap_detector
           python -m agents.opportunity_scorer.scorer
           python -m agents.opportunity_ranker.ranker
 
-      # =========================
-      # FINAL GENERATION
-      # =========================
-      - name: Generate Startup Blueprint
+      # -------------------------------------------------
+      # STAGE 6: FINAL PRODUCTION (Blueprints & Web)
+      # -------------------------------------------------
+      - name: Generate Startup Blueprints
         run: python -m agents.startup_generator.startup_blueprint_generator
 
-      - name: Analyze Momentum & Write Report
-        run: |
-          python -m agents.trend_momentum.momentum
-          python -m agents.idea_writer.writer
+      - name: External Momentum Validation
+        run: python -m agents.trend_momentum.momentum
 
-      - name: Pipeline finished
-        run: echo "AI Startup Factory production pipeline completed successfully"
+      - name: Build Web Assets (Landing Pages)
+        # Tahap terakhir: Membuat aset visual yang bisa dipamerkan
+        run: python -m agents.web_generator.landing_page_gen
+
+      # -------------------------------------------------
+      # DEPLOYMENT (Optional: Deploy to GitHub Pages)
+      # -------------------------------------------------
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: landing-pages
+          path: dist/
+          retention-days: 7
+
+      - name: Deployment Success
+        run: echo "🚀 Pipeline completed. New startup opportunities generated and ranked."
