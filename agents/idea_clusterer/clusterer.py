@@ -1,144 +1,88 @@
-import os
 import math
-import requests
 import numpy as np
 from sklearn.cluster import KMeans
+from core.config import settings
+from core.database import db
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
+def fetch_ideas_with_embeddings():
+    """
+    Fetches all ideas that have embeddings for clustering process.
+    """
+    query = "select=id,problem,problem_embedding&problem_embedding=not.is.null"
+    return db.fetch_records("ideas", query)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("Missing environment variables")
-    exit(1)
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
-
-
-# -----------------------------
-# FETCH EMBEDDINGS
-# -----------------------------
-def fetch_embeddings():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem,problem_embedding"
-
-    r = requests.get(url, headers=headers)
-
-    if r.status_code != 200:
-        print("Fetch error:", r.text)
-        return []
-
-    data = r.json()
-
-    print("Fetched rows:", len(data))
-
-    return data
-
-
-# -----------------------------
-# PARSE VECTOR
-# -----------------------------
-def parse_vector(v):
-
-    if v is None:
-        return None
-
-    if isinstance(v, list):
-        return v
-
-    v = v.strip("[]")
-
-    return [float(x) for x in v.split(",")]
-
-
-# -----------------------------
-# UPDATE CLUSTER RESULT
-# -----------------------------
-def update_cluster(row_id, cluster_id, size):
-
+def update_cluster_metadata(row_id, cluster_id, size):
+    """
+    Persists the cluster assignment and cluster size to the database.
+    """
     payload = {
         "cluster_id": int(cluster_id),
         "cluster_size": int(size)
     }
+    return db.update_record("ideas", row_id, payload)
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{row_id}"
-
-    r = requests.patch(url, headers=headers, json=payload)
-
-    if r.status_code in [200, 204]:
-        print("Updated:", row_id, "cluster", cluster_id)
-    else:
-        print("Update failed:", r.text)
-
-
-# -----------------------------
-# MAIN CLUSTERING
-# -----------------------------
 def main():
-
-    rows = fetch_embeddings()
-
+    print("=== AI Startup Factory: Semantic Clusterer ===")
+    
+    # 1. Data Acquisition
+    rows = fetch_ideas_with_embeddings()
+    
     if not rows:
-        print("No data found")
+        print("❌ No data found with valid embeddings. Run the Embedding Agent first.")
         return
 
     vectors = []
     ids = []
 
+    # 2. Vector Preparation
     for r in rows:
+        # Core database already returns list for JSONB columns, so no manual parsing needed
+        vec = r.get("problem_embedding")
+        if vec and isinstance(vec, list):
+            vectors.append(vec)
+            ids.append(r["id"])
 
-        vec = parse_vector(r["problem_embedding"])
-
-        if not vec:
-            continue
-
-        vectors.append(vec)
-        ids.append(r["id"])
-
-    if len(vectors) == 0:
-        print("No embeddings available")
+    if not vectors:
+        print("❌ No usable embedding vectors available.")
         return
 
     X = np.array(vectors)
+    total_samples = len(X)
 
-    # -----------------------------
-    # CLUSTER COUNT (√N rule)
-    # -----------------------------
-    n_clusters = max(3, int(math.sqrt(len(X))))
+    # 3. Dynamic Cluster Count Determination (Rule of Thumb: √N)
+    # We ensure a minimum of 3 clusters for meaningful grouping
+    n_clusters = max(3, int(math.sqrt(total_samples)))
 
-    print("Total ideas:", len(X))
-    print("Using clusters:", n_clusters)
+    print(f"📡 Total Ideas to Cluster: {total_samples}")
+    print(f"🤖 Initializing KMeans with {n_clusters} clusters...")
 
-    model = KMeans(
+    # 4. KMeans Execution
+    kmeans = KMeans(
         n_clusters=n_clusters,
         random_state=42,
         n_init=10
     )
+    
+    labels = kmeans.fit_predict(X)
 
-    labels = model.fit_predict(X)
-
-    # -----------------------------
-    # CALCULATE CLUSTER SIZE
-    # -----------------------------
+    # 5. Calculate Frequency (Cluster Size)
+    # This helps identify the most "crowded" or trending opportunity areas
     cluster_sizes = {}
+    for label in labels:
+        cluster_sizes[label] = cluster_sizes.get(label, 0) + 1
 
-    for l in labels:
-        cluster_sizes[l] = cluster_sizes.get(l, 0) + 1
-
-    # -----------------------------
-    # UPDATE DATABASE
-    # -----------------------------
+    # 6. Database Synchronization
+    print(f"💾 Syncing cluster metadata to Supabase...")
+    success_count = 0
+    
     for row_id, label in zip(ids, labels):
-
         size = cluster_sizes[label]
+        if update_cluster_metadata(row_id, label, size):
+            success_count += 1
+        else:
+            print(f"⚠️ Failed to update record ID: {row_id}")
 
-        update_cluster(row_id, label, size)
-
-    print("Clustering complete")
-
+    print(f"✅ Clustering complete. {success_count}/{total_samples} records updated.")
 
 if __name__ == "__main__":
     main()
