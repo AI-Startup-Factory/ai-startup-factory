@@ -1,222 +1,137 @@
-import os
 import time
 import json
-import requests
 import re
-
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
-
-BATCH_SIZE = 20
-DELAY = 0.8
-MAX_RETRY = 3
-
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
-
-
-# -----------------------------
-# FETCH UNPROCESSED SIGNALS
-# -----------------------------
+import random
+# Import core infrastructure
+from core.config import settings
+from core.database import db
+import requests
 
 def fetch_signals():
-
-    url = f"{SUPABASE_URL}/rest/v1/signals"
-
-    params = {
-        "processed": "eq.false",
-        "limit": BATCH_SIZE
-    }
-
-    r = requests.get(url, headers=headers, params=params)
-
-    if r.status_code != 200:
-        print("Fetch failed:", r.text)
-        return []
-
-    return r.json()
-
-
-# -----------------------------
-# INSERT IDEA
-# -----------------------------
+    """Retrieves unprocessed signals from the database using core wrapper."""
+    query = f"processed=eq.false&limit={settings.MAX_IDEAS_PER_RUN}"
+    return db.fetch_records("signals", query)
 
 def insert_idea(data):
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas"
-
-    r = requests.post(
-        url,
-        headers=headers,
-        json=data
-    )
-
-    if r.status_code not in [200, 201]:
-        print("Insert failed:", r.text)
-
-
-# -----------------------------
-# MARK SIGNAL PROCESSED
-# -----------------------------
+    """Persists detailed idea analysis to the ideas table."""
+    # We use a direct post to ideas table
+    url = f"{settings.SUPABASE_URL}/rest/v1/ideas"
+    headers = {
+        "apikey": settings.SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_ANON_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        r = requests.post(url, headers=headers, json=data)
+        return r.status_code in [200, 201, 204]
+    except Exception as e:
+        print(f"❌ DB Error: {e}")
+        return False
 
 def mark_processed(signal_id):
-
-    url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
-
-    r = requests.patch(
-        url,
-        headers=headers,
-        json={"processed": True}
-    )
-
-    if r.status_code not in [200, 204]:
-        print("Update failed:", r.text)
-
-
-# -----------------------------
-# LLM CALL WITH RETRY
-# -----------------------------
+    """Updates signal status after successful processing."""
+    return db.update_record("signals", signal_id, {"processed": True})
 
 def call_llm(prompt):
+    """Calls LLM with fallback mechanism using settings.MODELS."""
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory",
+        "X-Title": "AI Startup Factory - Writer Agent"
+    }
 
-    for attempt in range(MAX_RETRY):
+    # Use the robust model list from core
+    all_models = settings.MODELS.copy()
+    random.shuffle(all_models)
+
+    for model in all_models:
+        print(f"✍️ Attempting analysis with model: {model}")
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "response_format": {"type": "json_object"}
+        }
 
         try:
-
             r = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "openai/gpt-4o-mini",
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ]
-                },
-                timeout=60
+                headers=headers,
+                json=payload,
+                timeout=90
             )
 
             if r.status_code == 200:
-
-                data = r.json()
-
-                return data["choices"][0]["message"]["content"]
-
-            else:
-
-                print("API error:", r.status_code)
-
-        except Exception as e:
-
-            print("Request error:", e)
-
-        time.sleep(2)
-
+                return r.json()["choices"][0]["message"]["content"]
+            elif r.status_code == 429:
+                print(f"⚠️ Rate limit for {model}. Trying next...")
+                continue
+        except:
+            continue
+    
     return None
 
-
-# -----------------------------
-# PROMPT
-# -----------------------------
-
 def build_prompt(title, content):
-
+    """Constructs the analytical prompt for the AI."""
     return f"""
-You are a startup founder and market analyst.
+    You are a startup founder and market analyst. Analyze this signal and extract a startup opportunity.
+    Return STRICT JSON ONLY.
 
-Analyze the signal below and extract a startup opportunity.
+    Signal Title: {title}
+    Signal Content: {content}
 
-Return STRICT JSON only.
+    JSON Structure:
+    {{
+      "problem": "detailed problem",
+      "solution": "detailed technical solution",
+      "market": "category",
+      "audience": "who is this for",
+      "revenue_model": "how to make money",
+      "moat": "competitive advantage",
+      "market_size": "TAM/SAM estimate",
+      "competition": "existing players or alternatives"
+    }}
+    """
 
-Fields:
-
-problem
-solution
-market
-audience
-revenue_model
-moat
-market_size
-competition
-
-Signal Title:
-{title}
-
-Signal Content:
-{content}
-"""
-
-
-# -----------------------------
-# CLEAN JSON FROM LLM
-# -----------------------------
-
-def clean_json(text):
-
-    text = text.strip()
-
-    text = re.sub(r"^```json", "", text)
-    text = re.sub(r"```$", "", text)
-
-    return text.strip()
-
-
-# -----------------------------
-# PARSE JSON
-# -----------------------------
-
-def parse_response(text):
-
+def clean_and_parse(text):
+    """Robust JSON parsing with markdown removal."""
     try:
-        cleaned = clean_json(text)
+        cleaned = re.sub(r"```json\s?|\s?```", "", text).strip()
         return json.loads(cleaned)
-
-    except Exception as e:
-
-        print("JSON parse failed:", e)
-
+    except:
         return None
 
-
-# -----------------------------
-# MAIN
-# -----------------------------
-
 def main():
-
+    print("=== AI Startup Factory: Idea Writer Agent ===")
+    
     signals = fetch_signals()
+    if not signals:
+        print("✅ No new signals to analyze.")
+        return
 
-    print("Signals to process:", len(signals))
+    print(f"📡 Processing {len(signals)} signals...")
 
-    processed = 0
-
+    processed_count = 0
     for s in signals:
-
         signal_id = s["id"]
         title = s["title"]
-        content = s.get("content", "")
+        content = s.get("content", "No content provided.")
 
+        print(f"\n📝 Analyzing Signal: {title[:50]}...")
         prompt = build_prompt(title, content)
-
         response = call_llm(prompt)
 
         if not response:
+            print(f"❌ Failed to get analysis for Signal {signal_id}")
             continue
 
-        parsed = parse_response(response)
-
+        parsed = clean_and_parse(response)
         if not parsed:
+            print(f"❌ Failed to parse JSON for Signal {signal_id}")
             continue
 
+        # Map parsed data to database schema
         idea_data = {
             "problem": parsed.get("problem"),
             "solution": parsed.get("solution"),
@@ -228,18 +143,15 @@ def main():
             "competition": parsed.get("competition")
         }
 
-        insert_idea(idea_data)
+        if insert_idea(idea_data):
+            mark_processed(signal_id)
+            processed_count += 1
+            print(f"✅ Idea successfully written and saved.")
+        
+        # Respect API limits
+        time.sleep(1)
 
-        mark_processed(signal_id)
-
-        processed += 1
-
-        print("Idea created from signal:", signal_id)
-
-        time.sleep(DELAY)
-
-    print("Processed:", processed)
-
+    print(f"\n=== Task Completed: {processed_count} ideas generated ===")
 
 if __name__ == "__main__":
     main()
