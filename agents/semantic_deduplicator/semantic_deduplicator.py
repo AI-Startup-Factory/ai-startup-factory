@@ -4,169 +4,145 @@ import math
 import json
 import time
 
+# Config
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+# Threshold 0.88 - 0.92 adalah sweet spot untuk startup ideas
 SIMILARITY_THRESHOLD = 0.88
 
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Prefer": "return=minimal"
 }
-
 
 # ==========================================
 # FETCH IDEAS WITH EMBEDDINGS
 # ==========================================
-
 def fetch_ideas():
-
     url = f"{SUPABASE_URL}/rest/v1/ideas"
-
+    
+    # Kita hanya mengambil yang sudah ada embedding dan bukan duplikat yang sudah diketahui
     params = {
-        "select": "id,problem,problem_embedding,is_duplicate",
+        "select": "id,problem,problem_embedding",
         "problem_embedding": "not.is.null",
         "is_duplicate": "eq.false",
-        "limit": 5000
+        "limit": 1000 # Limit batch per run agar tidak timeout di GitHub Actions
     }
 
-    r = requests.get(url, headers=headers, params=params)
-
-    if r.status_code != 200:
-        print("Fetch error:", r.text)
+    try:
+        r = requests.get(url, headers=headers, params=params)
+        if r.status_code != 200:
+            print(f"Fetch error: {r.text}")
+            return []
+        return r.json()
+    except Exception as e:
+        print(f"Connection error: {e}")
         return []
 
-    return r.json()
-
-
 # ==========================================
-# VECTOR PARSER
+# VECTOR PARSER (Robust for pgvector strings)
 # ==========================================
-
 def parse_vector(v):
-
-    if v is None:
-        return None
-
-    if isinstance(v, list):
-        return v
-
-    try:
-        v = v.strip("[]")
-        return [float(x) for x in v.split(",")]
-    except:
-        return None
-
+    if v is None: return None
+    if isinstance(v, list): return v
+    
+    # Supabase kadang mengembalikan string "[0.1, 0.2, ...]"
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except:
+            try:
+                v = v.strip("[]").split(",")
+                return [float(x) for x in v]
+            except:
+                return None
+    return None
 
 # ==========================================
-# COSINE SIMILARITY
+# COSINE SIMILARITY (Optimized)
 # ==========================================
-
 def cosine_similarity(a, b):
-
-    if len(a) != len(b):
-        return 0
-
-    dot = sum(x*y for x, y in zip(a, b))
-
-    norm_a = math.sqrt(sum(x*x for x in a))
-    norm_b = math.sqrt(sum(x*x for x in b))
-
-    if norm_a == 0 or norm_b == 0:
-        return 0
-
-    return dot / (norm_a * norm_b)
-
+    if len(a) != len(b): return 0
+    
+    dot_product = 0
+    norm_a = 0
+    norm_b = 0
+    
+    for x, y in zip(a, b):
+        dot_product += x * y
+        norm_a += x * x
+        norm_b += y * y
+        
+    if norm_a == 0 or norm_b == 0: return 0
+    return dot_product / (math.sqrt(norm_a) * math.sqrt(norm_b))
 
 # ==========================================
 # MARK DUPLICATE
 # ==========================================
-
 def mark_duplicate(duplicate_id, original_id):
-
     payload = {
         "is_duplicate": True,
         "duplicate_of": original_id
     }
-
     url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{duplicate_id}"
-
-    r = requests.patch(url, headers=headers, json=payload)
-
-    if r.status_code in [200, 204]:
-        print(f"Duplicate {duplicate_id} -> {original_id}")
-    else:
-        print("Update failed:", r.text)
-
+    try:
+        r = requests.patch(url, headers=headers, json=payload)
+        return r.status_code in [200, 204]
+    except:
+        return False
 
 # ==========================================
 # MAIN ENGINE
 # ==========================================
-
 def main():
-
-    print("Running Semantic Deduplicator")
-
+    print("=== Running Semantic Deduplicator ===")
+    
     ideas = fetch_ideas()
-
-    print("Ideas fetched:", len(ideas))
-
     if len(ideas) < 2:
-        print("Not enough ideas")
+        print("Not enough new ideas to compare.")
         return
 
-    vectors = {}
-
+    # Pre-parse vectors to save CPU cycles
+    processed_data = []
     for i in ideas:
-
         vec = parse_vector(i.get("problem_embedding"))
-
         if vec:
-            vectors[i["id"]] = vec
+            processed_data.append({
+                "id": i["id"],
+                "vector": vec,
+                "problem": i.get("problem", "")[:50]
+            })
 
-    ids = list(vectors.keys())
+    print(f"Comparing {len(processed_data)} ideas...")
 
-    checked = set()
+    duplicate_count = 0
+    already_marked = set()
 
-    duplicates = 0
+    for i in range(len(processed_data)):
+        id_a = processed_data[i]["id"]
+        if id_a in already_marked: continue
+        
+        vec_a = processed_data[i]["vector"]
 
-    for i in range(len(ids)):
+        for j in range(i + 1, len(processed_data)):
+            id_b = processed_data[j]["id"]
+            if id_b in already_marked: continue
+            
+            vec_b = processed_data[j]["vector"]
+            
+            similarity = cosine_similarity(vec_a, vec_b)
 
-        id_a = ids[i]
+            if similarity >= SIMILARITY_THRESHOLD:
+                print(f"MATCH FOUND: '{processed_data[i]['problem']}' ≈ '{processed_data[j]['problem']}' (Sim: {similarity:.4f})")
+                
+                if mark_duplicate(id_b, id_a):
+                    already_marked.add(id_b)
+                    duplicate_count += 1
 
-        if id_a in checked:
-            continue
-
-        vec_a = vectors[id_a]
-
-        for j in range(i+1, len(ids)):
-
-            id_b = ids[j]
-
-            if id_b in checked:
-                continue
-
-            vec_b = vectors[id_b]
-
-            sim = cosine_similarity(vec_a, vec_b)
-
-            if sim >= SIMILARITY_THRESHOLD:
-
-                mark_duplicate(id_b, id_a)
-
-                checked.add(id_b)
-
-                duplicates += 1
-
-        checked.add(id_a)
-
-        if i % 50 == 0:
-            print("Progress:", i, "/", len(ids))
-
-    print("Total duplicates:", duplicates)
-    print("Semantic deduplication finished")
-
+    print(f"Deduplication finished. Found and marked {duplicate_count} duplicates.")
 
 if __name__ == "__main__":
     main()
