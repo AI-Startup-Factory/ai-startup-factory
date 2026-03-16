@@ -1,176 +1,107 @@
-import os
-import requests
 import json
-import time
 import re
-from pathlib import Path
+import time
+import random
+import requests
+# Import core infrastructure
+from core.config import settings
+from core.database import db
 
-# =====================================
-# CONFIG & ENV (Prinsip 3 & 9)
-# =====================================
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+def fetch_pending_extractions():
+    """
+    Retrieves ideas from the 'ideas' table where 'solution' is missing,
+    using 'problem' as the source for enrichment.
+    """
+    query = f"solution=is.null&select=id,problem&limit={settings.MAX_IDEAS_PER_RUN}"
+    return db.fetch_records("ideas", query)
 
-BATCH_SIZE = 20
-
-# Daftar model free terbaru untuk redundansi (Prinsip 16)
-MODEL_LIST = [
-    "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
-    "google/gemma-3-4b-it:free",
-    "google/gemma-3n-e2b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "qwen/qwen3-4b:free",
-    "qwen/qwen3-coder:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "stepfun/step-3.5-flash:free",
-    "arcee-ai/trinity-mini:free",
-    "z-ai/glm-4.5-air:free",
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
-]
-
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=minimal"
-}
-
-# =====================================
-# FETCH DATA (Alignment dengan Skema Baru)
-# =====================================
-def fetch_tasks():
-    # Karena kolom 'idea' tidak ada, kita mencari record yang 'solution'-nya masih kosong 
-    # untuk diproses berdasarkan input di kolom 'problem'
-    url = f"{SUPABASE_URL}/rest/v1/ideas?solution=is.null&select=id,problem&limit={BATCH_SIZE}"
-    
-    try:
-        r = requests.get(url, headers=headers)
-        if r.status_code != 200:
-            print(f"Fetch error: {r.status_code} - {r.text}")
-            return []
-        return r.json()
-    except Exception as e:
-        print(f"Connection error during fetch: {e}")
-        return []
-
-# =====================================
-# CALL AI WITH FALLBACK (Prinsip 16)
-# =====================================
-def call_ai(prompt):
-    headers_ai = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/ai-startup-factory", 
-        "X-Title": "AI Startup Factory Extractor"
-    }
-
-    for model in MODEL_LIST:
-        print(f"Attempting extraction with: {model}")
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1, # Rendah agar JSON lebih stabil
-            "response_format": {"type": "json_object"}
-        }
-
-        try:
-            r = requests.post(OPENROUTER_URL, headers=headers_ai, json=payload, timeout=60)
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
-            elif r.status_code == 429:
-                print("Rate limited, skipping model...")
-                continue
-        except Exception as e:
-            print(f"Model {model} failed: {e}")
-        
-        time.sleep(1)
-    return None
-
-# =====================================
-# PARSE & UPDATE (Prinsip 2: SoC)
-# =====================================
-def parse_json(text):
-    try:
-        text = re.sub(r"```json\s?|\s?```", "", text).strip()
-        return json.loads(text)
-    except:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try: return json.loads(match.group())
-            except: return None
-    return None
-
-def update_database(idea_id, data):
-    # Mapping data ke kolom yang benar-benar ada di tabel ideas Anda
+def update_extracted_data(idea_id, data):
+    """
+    Persists enriched business details back to the 'ideas' table.
+    """
     payload = {
         "problem": data.get("problem"),
         "solution": data.get("solution"),
         "audience": data.get("audience"),
-        "market": data.get("market", "Unknown")
+        "market": data.get("market", "General")
+    }
+    return db.update_record("ideas", idea_id, payload)
+
+def call_extraction_ai(raw_text):
+    """
+    Uses AI to transform raw problem descriptions into structured 
+    business entities with fallback model support.
+    """
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory"
     }
 
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
-    try:
-        r = requests.patch(url, json=payload, headers=headers)
-        return r.status_code in [200, 204]
-    except Exception as e:
-        print(f"Update error for {idea_id}: {e}")
-        return False
+    prompt = f"""
+    Act as a business analyst. Analyze this startup idea and extract structured details.
+    Raw Input: {raw_text}
 
-# =====================================
-# MAIN RUNNER
-# =====================================
+    Return ONLY a JSON object with this exact structure:
+    {{
+        "problem": "detailed problem statement",
+        "solution": "detailed solution description",
+        "audience": "target user persona",
+        "market": "industry category"
+    }}
+    """
+
+    all_models = settings.MODELS.copy()
+    random.shuffle(all_models)
+
+    for model in all_models:
+        print(f"🧩 Problem Extractor using: {model}")
+        try:
+            r = requests.post(url, headers=headers, json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
+            }, timeout=60)
+
+            if r.status_code == 200:
+                content = r.json()["choices"][0]["message"]["content"]
+                clean_json = re.sub(r"```json\s?|\s?```", "", content).strip()
+                return json.loads(clean_json)
+        except:
+            continue
+        
+    return None
+
 def main():
-    print("=== AI Startup Factory: Problem Extractor ===")
+    print("=== AI Startup Factory: Problem Extractor Agent ===")
     
-    tasks = fetch_tasks()
+    tasks = fetch_pending_extractions()
     if not tasks:
-        print("No new tasks found in 'ideas' table.")
+        print("✅ No pending extraction tasks found.")
         return
 
-    print(f"Processing {len(tasks)} items...")
+    print(f"📡 Refining {len(tasks)} raw problem entries...")
 
+    success_count = 0
     for item in tasks:
-        # Menggunakan kolom 'problem' sebagai basis deskripsi yang akan diperkaya
-        raw_text = item.get("problem", "") 
-        if not raw_text:
-            continue
+        raw_text = item.get("problem")
+        idea_id = item.get("id")
 
-        prompt = f"""
-        Act as a business analyst. Analyze this startup idea and extract structured details.
+        if not raw_text: continue
+
+        print(f"🔍 Extracting details for ID: {idea_id}...")
+        enriched_data = call_extraction_ai(raw_text)
+
+        if enriched_data:
+            if update_extracted_data(idea_id, enriched_data):
+                print(f"✅ Successfully structured ID: {idea_id}")
+                success_count += 1
         
-        Raw Input: {raw_text}
+        time.sleep(1)
 
-        Return ONLY a JSON object with this exact structure:
-        {{
-            "problem": "detailed problem statement",
-            "solution": "detailed solution description",
-            "audience": "target user persona",
-            "market": "industry category"
-        }}
-        """
-
-        ai_response = call_ai(prompt)
-        if not ai_response:
-            continue
-
-        parsed_data = parse_json(ai_response)
-        if parsed_data:
-            success = update_database(item["id"], parsed_data)
-            if success:
-                print(f"Successfully updated ID: {item['id']}")
-            else:
-                print(f"Failed to update ID: {item['id']}")
-        
-        time.sleep(1) # Etika API
+    print(f"\n=== Task Completed: {success_count}/{len(tasks)} records enriched ===")
 
 if __name__ == "__main__":
     main()
