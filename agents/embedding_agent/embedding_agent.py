@@ -1,160 +1,66 @@
 import os
 import requests
+import torch
 from sentence_transformers import SentenceTransformer
+from pathlib import Path
 
-from agents.utils.vector_projection import project_vector
-
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY")
-
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
+# Config
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Prefer": "return=minimal"
 }
 
-print("Loading local embedding model...")
+# Load model (Prinsip 1: Modularization)
+# Menggunakan model 384-dimension sesuai Super Context
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-local_model = SentenceTransformer("all-MiniLM-L6-v2")
+def fetch_unembedded_ideas():
+    # Mengambil ide yang problem_embedding-nya masih kosong
+    # Pastikan mengambil kolom 'problem' karena 'idea' sudah tidak ada
+    url = f"{SUPABASE_URL}/rest/v1/ideas?problem_embedding=is.null&select=id,problem&limit=25"
+    r = requests.get(url, headers=headers)
+    return r.json() if r.status_code == 200 else []
 
-
-# -------------------------------------------------
-# FETCH IDEAS WITHOUT EMBEDDING
-# -------------------------------------------------
-
-def fetch_rows():
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas"
-
-    params = {
-        "select":"id,problem",
-        "problem_embedding":"is.null",
-        "limit":50
-    }
-
-    r = requests.get(url, headers=headers, params=params)
-
-    if r.status_code != 200:
-
-        print("Fetch error:", r.text)
-
-        return []
-
-    data = r.json()
-
-    print("Rows needing embedding:", len(data))
-
-    return data
-
-
-# -------------------------------------------------
-# LOCAL EMBEDDING
-# -------------------------------------------------
-
-def embed_local(text):
-
-    vec = local_model.encode(text)
-
-    return vec.tolist()
-
-
-# -------------------------------------------------
-# OPENROUTER EMBEDDING
-# -------------------------------------------------
-
-def embed_openrouter(text):
-
-    r = requests.post(
-        "https://openrouter.ai/api/v1/embeddings",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model":"qwen/qwen3-embedding-0.6b",
-            "input":text
-        },
-        timeout=30
-    )
-
-    if r.status_code != 200:
-
-        raise Exception("OpenRouter embedding failed")
-
-    data = r.json()
-
-    return data["data"][0]["embedding"]
-
-
-# -------------------------------------------------
-# VECTOR TO POSTGRES FORMAT
-# -------------------------------------------------
-
-def vector_to_pg(v):
-
-    return "[" + ",".join(str(x) for x in v) + "]"
-
-
-# -------------------------------------------------
-# UPDATE ROW
-# -------------------------------------------------
-
-def update_row(row_id, vector):
-
+def update_embedding(idea_id, embedding_vector):
+    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{idea_id}"
     payload = {
-        "problem_embedding": vector_to_pg(vector)
+        "problem_embedding": embedding_vector.tolist()
     }
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{row_id}"
-
     r = requests.patch(url, headers=headers, json=payload)
-
-    if r.status_code in [200,204]:
-
-        print("Updated embedding:", row_id)
-
-    else:
-
-        print("Update failed:", r.text)
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
+    return r.status_code in [200, 204]
 
 def main():
-
-    rows = fetch_rows()
-
-    if not rows:
-
-        print("No rows to process")
-
+    print("=== Running Embedding Agent ===")
+    ideas = fetch_unembedded_ideas()
+    
+    if not ideas:
+        print("No ideas need embedding.")
         return
 
-    for row in rows:
+    print(f"Generating embeddings for {len(ideas)} ideas...")
 
-        text = row["problem"]
+    for item in ideas:
+        text_to_embed = item.get("problem")
+        if not text_to_embed:
+            continue
 
         try:
-
-            # primary embedding (local)
-            vec = embed_local(text)
-
-        except Exception:
-
-            print("Local embedding failed, using OpenRouter")
-
-            vec = embed_openrouter(text)
-
-        # projection to 384 dimension
-        vec = project_vector(vec)
-
-        update_row(row["id"], vec)
-
+            # Generate vector
+            embedding = model.encode(text_to_embed)
+            
+            # Push to Supabase
+            success = update_embedding(item["id"], embedding)
+            if success:
+                print(f"Successfully embedded ID: {item['id']}")
+            else:
+                print(f"Failed to update embedding for ID: {item['id']}")
+        except Exception as e:
+            print(f"Error processing ID {item['id']}: {e}")
 
 if __name__ == "__main__":
     main()
