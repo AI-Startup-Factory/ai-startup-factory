@@ -51,7 +51,7 @@ jobs:
       # -------------------------------------------------
       - name: Test Idea Engine
         run: |
-          python -m agents.idea_generator.generator
+          python -u -m agents.idea_generator.generator
           python -m agents.problem_extractor.extractor
 
       - name: Test Vector & Intelligence Layer
