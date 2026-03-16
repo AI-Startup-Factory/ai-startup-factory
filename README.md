@@ -1,1 +1,41 @@
-**AI Startup Factory**, sebuah kerangka kerja otomatis yang dirancang untuk **mengidentifikasi dan membangun konsep bisnis** rintisan. Sistem ini bekerja dengan mengumpulkan data dari berbagai sumber seperti **Reddit, GitHub, dan HackerNews** melalui modul pemindai tren. Berbagai **agen kecerdasan buatan** kemudian memproses data tersebut untuk mengekstrak masalah nyata, mengelompokkan ide serupa, serta menghapus duplikasi secara semantik. Alur kerja yang terintegrasi dalam **GitHub Actions** ini juga mencakup analisis pasar, pemberian skor peluang, hingga pembuatan **cetak biru startup** yang mendetail. Secara keseluruhan, kode ini menunjukkan ekosistem modular untuk **mengotomatisasi riset pasar** dan pengembangan ide produk berbasis teknologi.
+# 🚀 AI Startup Factory (v2.0)
+
+**AI Startup Factory** adalah ekosistem otonom yang dirancang untuk memindai tren global, mengeksplorasi celah pasar, dan membangun konsep startup siap eksekusi secara otomatis. Sistem ini bekerja 24/7 menggunakan rangkaian agen AI modular yang terintegrasi dengan GitHub Actions dan Supabase.
+
+---
+
+## 🏗️ Arsitektur & Alur Kerja
+
+Sistem ini mengikuti prinsip **Modularization** dan **Separation of Concerns (SoC)**, di mana setiap agen memiliki tanggung jawab spesifik dalam satu jalur produksi yang kohesif.
+
+1.  **Ingestion**: `Trend Scanner` mengumpulkan sinyal mentah dari berbagai sumber (Reddit, GitHub, HackerNews, dll).
+2.  **Synthesis**: `Idea Generator` & `Problem Extractor` mengubah sinyal menjadi entitas bisnis terstruktur.
+3.  **Intelligence**: `Embedding Agent` & `Deduplicator` memastikan data unik dan memiliki representasi vektor untuk analisis semantik.
+4.  **Discovery**: `Clusterer` & `Gap Detector` menemukan pola dan celah peluang pasar yang belum jenuh.
+5.  **Evaluation**: `Opportunity Scorer` (VC Mode) & `Ranker` memberikan penilaian objektif dan urutan prioritas.
+6.  **Realization**: `Blueprint Generator` & `Landing Page Gen` menciptakan rencana teknis dan aset visual pemasaran.
+
+---
+
+## 📂 Struktur Proyek
+
+```text
+├── .github/workflows/       # Automasi Pipeline (Daily, Debug, Manual)
+├── core/                    # Infrastruktur Inti (Config & DB Wrapper)
+├── agents/
+│   ├── trend_scanner/       # Ingestor data mentah dari berbagai sumber
+│   ├── idea_generator/      # Mesin pembuat benih ide awal
+│   ├── problem_extractor/   # Strukturisasi data (Problem/Solution/Audience)
+│   ├── embedding_agent/     # Pemrosesan vektor (Sentence-Transformers)
+│   ├── semantic_deduplicator/# Pembersihan duplikasi berbasis kemiripan makna
+│   ├── clusterer/           # Pengelompokan ide berdasarkan topik
+│   ├── market_analyzer/     # Analisis tren dan ukuran pasar
+│   ├── opportunity_discovery/ # Analisis celah vektor (Gap Analysis)
+│   ├── opportunity_gap_detector/ # Kalkulasi skor densitas & momentum
+│   ├── opportunity_scorer/  # Penilaian kualitatif gaya Venture Capital
+│   ├── opportunity_ranker/  # Agregasi skor final & pembobotan
+│   ├── startup_generator/   # Pembuat blueprint teknis & spesifikasi MVP
+│   ├── trend_momentum/      # Validasi eksternal (HackerNews & GitHub Stars)
+│   └── web_generator/       # Pembuat Landing Page otomatis (Tailwind CSS)
+├── requirements.txt         # Dependensi Python
+└── README.md                # Dokumentasi Proyek
