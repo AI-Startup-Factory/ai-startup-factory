@@ -15,26 +15,23 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 MODEL_LIST = [
 
-"meta-llama/llama-3.3-70b-instruct:free",
-"openai/gpt-oss-120b:free",
 "google/gemma-3-27b-it:free",
-"mistralai/mistral-small-3.1-24b-instruct:free",
-"arcee-ai/trinity-large-preview:free",
-"arcee-ai/trinity-mini:free",
-"z-ai/glm-4.5-air:free",
-"nvidia/nemotron-3-nano-30b-a3b:free",
-"qwen/qwen3-next-80b-a3b-instruct:free",
-"qwen/qwen3-coder:free",
-"openai/gpt-oss-20b:free",
-"nousresearch/hermes-3-llama-3.1-405b:free",
 "google/gemma-3-12b-it:free",
 "google/gemma-3-4b-it:free",
-"google/gemma-3n-e4b-it:free",
 "google/gemma-3n-e2b-it:free",
-"meta-llama/llama-3.2-3b-instruct:free",
+"mistralai/mistral-small-3.1-24b-instruct:free",
+"nvidia/nemotron-3-nano-30b-a3b:free",
+"nvidia/nemotron-nano-9b-v2:free",
 "qwen/qwen3-4b:free",
+"qwen/qwen3-coder:free",
+"meta-llama/llama-3.3-70b-instruct:free",
+"meta-llama/llama-3.2-3b-instruct:free",
+"liquid/lfm-2.5-1.2b-thinking:free",
 "liquid/lfm-2.5-1.2b-instruct:free",
-"liquid/lfm-2.5-1.2b-thinking:free"
+"stepfun/step-3.5-flash:free",
+"arcee-ai/trinity-mini:free",
+"z-ai/glm-4.5-air:free",
+"cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
 ]
 
 
