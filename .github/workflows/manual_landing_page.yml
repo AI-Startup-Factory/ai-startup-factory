@@ -1,0 +1,35 @@
+name: Manual Landing Page Generator
+
+on:
+  workflow_dispatch: # Memungkinkan eksekusi manual dari UI GitHub
+
+jobs:
+  build-landing-page:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run Landing Page Script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python -m agents.web_generator.landing_page_gen
+
+      - name: Upload Landing Page as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-landing-page
+          path: index.html
+          retention-days: 7
