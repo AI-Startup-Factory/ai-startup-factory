@@ -1,7 +1,7 @@
 name: Manual Landing Page Generator
 
 on:
-  workflow_dispatch: # Memungkinkan eksekusi manual dari UI GitHub
+  workflow_dispatch: # Memungkinkan eksekusi manual melalui tombol "Run workflow" di GitHub Actions
 
 jobs:
   build-landing-page:
@@ -15,6 +15,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip' # Mempercepat run berikutnya dengan caching
 
       - name: Install Dependencies
         run: |
@@ -25,11 +26,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        # Memastikan script dijalankan sebagai modul sesuai struktur folder Anda
         run: python -m agents.web_generator.landing_page_gen
 
-      - name: Upload Landing Page as Artifact
+      - name: Upload Landing Pages as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: startup-landing-page
-          path: index.html
+          name: top-5-landing-pages
+          path: dist/
           retention-days: 7
+          if-no-files-found: error # Memberikan peringatan jika folder dist kosong
