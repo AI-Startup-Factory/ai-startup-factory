@@ -1,136 +1,70 @@
-import json
-import re
-import time
-import random
-# Import core infrastructure
+import math
 from core.config import settings
 from core.database import db
-import requests
 
-def clean_int_score(val):
-    """Safely converts any AI output value into a valid Integer for DB."""
-    try:
-        if val is None: return 0
-        # Convert to float first (to handle "8.5"), then round and int
-        return int(round(float(val)))
-    except (ValueError, TypeError):
-        return 0
-
-def fetch_unscored_ideas():
-    """Retrieves ideas that are missing the final opportunity_score."""
-    query = "opportunity_score=is.null&select=id,problem&limit=25"
+def fetch_ideas_for_gap():
+    """Mengambil ide yang sudah diklaster untuk dihitung peluang celahnya."""
+    query = "select=id,cluster_id,cluster_size,trend_strength,market_size,competition"
     return db.fetch_records("ideas", query)
 
-def call_scoring_ai(problem):
-    """Calls AI to evaluate the startup idea using centralized model list."""
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/ai-startup-factory"
-    }
+def normalize_market(v):
+    v = str(v).lower() if v else ""
+    if "trillion" in v: return 1.0
+    if "billion" in v: return 0.8
+    if "million" in v: return 0.5
+    return 0.3
 
-    prompt = f"""
-    You are a venture capital analyst. Evaluate this startup opportunity.
-    Problem: {problem}
-    
-    Score each category from 0 to 10.
-    Return STRICT JSON format:
-    {{
-      "trend": number,
-      "market": number,
-      "competition": number,
-      "feasibility": number,
-      "founder_fit": number
-    }}
-    """
-
-    # Robust model rotation from core
-    all_models = settings.MODELS.copy()
-    random.shuffle(all_models)
-
-    for model in all_models:
-        print(f"🔬 Scoring with model: {model}")
-        try:
-            r = requests.post(url, headers=headers, json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"}
-            }, timeout=60)
-            
-            if r.status_code == 200:
-                content = r.json()["choices"][0]["message"]["content"]
-                # Clean potential markdown
-                clean_json = re.sub(r"```json\s?|\s?```", "", content).strip()
-                return json.loads(clean_json)
-            elif r.status_code == 429:
-                continue
-        except:
-            continue
-    return None
-
-def calculate_weighted_final(scores):
-    """Calculates final score (0-100) based on weighted categories."""
-    t = clean_int_score(scores.get("trend"))
-    m = clean_int_score(scores.get("market"))
-    c = clean_int_score(scores.get("competition"))
-    f = clean_int_score(scores.get("feasibility"))
-    ff = clean_int_score(scores.get("founder_fit"))
-
-    # Weighted calculation (Result 0-10)
-    weighted_sum = (
-        0.30 * t +
-        0.25 * m +
-        0.20 * c +
-        0.15 * f +
-        0.10 * ff
-    )
-    # Return as integer (scale 0-100)
-    return int(round(weighted_sum * 10))
-
-def update_idea_scores(row_id, scores, final_score):
-    """Persists detailed scores and final rank to database."""
-    payload = {
-        "trend_score": clean_int_score(scores.get("trend")),
-        "market_score": clean_int_score(scores.get("market")),
-        "competition_score": clean_int_score(scores.get("competition")),
-        "feasibility_score": clean_int_score(scores.get("feasibility")),
-        "founder_fit_score": clean_int_score(scores.get("founder_fit")),
-        "opportunity_score": final_score
-    }
-    return db.update_record("ideas", row_id, payload)
+def normalize_comp(v):
+    v = str(v).lower() if v else ""
+    if "low" in v: return 0.8
+    if "medium" in v: return 0.5
+    if "high" in v: return 0.2
+    return 0.5
 
 def main():
-    print("=== AI Startup Factory: Opportunity Scorer ===")
-    
-    ideas = fetch_unscored_ideas()
+    print("=== [AGENT] Opportunity Gap Detector ===")
+    ideas = fetch_ideas_for_gap()
     if not ideas:
-        print("✅ No new ideas found for scoring.")
+        print("✅ Tidak ada data klaster untuk dianalisis.")
         return
 
-    print(f"📡 Processing {len(ideas)} ideas...")
+    # Kelompokkan berdasarkan klaster
+    clusters = {}
+    for i in ideas:
+        cid = i.get("cluster_id")
+        if cid:
+            if cid not in clusters: clusters[cid] = []
+            clusters[cid].append(i)
 
-    for row in ideas:
-        problem = row["problem"]
-        idea_id = row["id"]
-        print(f"\n📝 Analyzing: {problem[:60]}...")
+    print(f"📡 Menganalisis {len(clusters)} klaster...")
 
-        scores_data = call_scoring_ai(problem)
-        if not scores_data:
-            print(f"❌ AI scoring failed for ID: {idea_id}")
-            continue
-
-        final_score = calculate_weighted_final(scores_data)
+    for cid, rows in clusters.items():
+        size = len(rows)
+        # Semakin padat klaster, semakin kecil peluang 'gap' (1 - density)
+        density = min(1.0, size / 20)
         
-        if update_idea_scores(idea_id, scores_data, final_score):
-            print(f"✅ Success: ID {idea_id} scored {final_score}/100")
-        else:
-            print(f"❌ DB Update failed for ID: {idea_id}")
-        
-        time.sleep(1) # Safety delay
+        # Hitung rata-rata tren
+        trends = [float(r.get("trend_strength") or 30) for r in rows]
+        momentum = (sum(trends) / len(trends)) / 100
 
-    print("\n=== Scoring Session Completed ===")
+        # Skor rata-rata market dan kompetisi
+        m_score = sum(normalize_market(r.get("market_size")) for r in rows) / size
+        c_score = sum(normalize_comp(r.get("competition")) for r in rows) / size
+
+        # Rumus Peluang: Bobot Gap(35%), Momentum(25%), Market(25%), Comp(15%)
+        opp_score = ((1 - density) * 0.35) + (momentum * 0.25) + (m_score * 0.25) + (c_score * 0.15)
+
+        # Update semua ide dalam klaster ini
+        for r in rows:
+            payload = {
+                "cluster_density": float(density),
+                "cluster_momentum": float(momentum),
+                "cluster_opportunity_score": float(opp_score),
+                "opportunity_gap_score": int(opp_score * 100)
+            }
+            db.update_record("ideas", r["id"], payload)
+    
+    print("✅ Analisis Gap Selesai.")
 
 if __name__ == "__main__":
     main()
