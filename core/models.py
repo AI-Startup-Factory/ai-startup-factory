@@ -1,0 +1,19 @@
+MODEL_LIST = [
+    "google/gemma-3-27b-it:free",
+    "google/gemma-3-12b-it:free",
+    "google/gemma-3-4b-it:free",
+    "google/gemma-3n-e2b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "qwen/qwen3-4b:free",
+    "qwen/qwen3-coder:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "liquid/lfm-2.5-1.2b-thinking:free",
+    "liquid/lfm-2.5-1.2b-instruct:free",
+    "stepfun/step-3.5-flash:free",
+    "arcee-ai/trinity-mini:free",
+    "z-ai/glm-4.5-air:free",
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+]
