@@ -1,9 +1,21 @@
-openai
-requests
-beautifulsoup4
-pandas
-sentence-transformers==2.7.0
+# --- Core Factory Dependencies ---
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+urllib3>=2.0.0
 numpy<2
+
+# --- Intelligence & Vector Processing ---
+# Kita tetap pertahankan dependensi Anda, namun pastikan versi yang stabil
+sentence-transformers==2.7.0
 torch==2.2.2
 scikit-learn
+pandas
+
+# --- Ingestion & Scraping ---
+beautifulsoup4
 feedparser
+openai  # Tetap ada jika Anda menggunakan provider OpenAI secara langsung
+
+# --- Utilities ---
+pathlib>=1.0.1
