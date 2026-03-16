@@ -1,72 +1,23 @@
-import os
-import requests
+import json
 import re
 import random
 import time
-import json
-
-# ================================
-# CONFIGURATION & ENV
-# ================================
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-
-SUPABASE_HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=minimal"
-}
-
-# ================================
-# MODEL POOL (Comprehensive Free List)
-# ================================
-MODEL_LIST = [
-    "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
-    "google/gemma-3-4b-it:free",
-    "google/gemma-3n-e2b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "qwen/qwen3-4b:free",
-    "qwen/qwen3-coder:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "stepfun/step-3.5-flash:free",
-    "arcee-ai/trinity-mini:free",
-    "z-ai/glm-4.5-air:free",
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
-]
-
-MAX_SIGNALS = 15
-MAX_IDEAS = 10
-
-# ================================
-# DATABASE TOOLS
-# ================================
+# Import infrastruktur core
+from core.config import settings
+from core.database import db
+import requests # Tetap dibutuhkan untuk discovery model baru di OpenRouter
 
 def load_signals():
-    """Mengambil sinyal yang belum diolah."""
-    url = f"{SUPABASE_URL}/rest/v1/signals?processed=eq.false&select=id,title&limit={MAX_SIGNALS}"
-    try:
-        r = requests.get(url, headers=SUPABASE_HEADERS)
-        return r.json() if r.status_code == 200 else []
-    except:
-        return []
+    """Retrieves unprocessed signals from the database."""
+    query = f"processed=eq.false&select=id,title&limit={settings.MAX_IDEAS_PER_RUN * 2}"
+    return db.fetch_records("signals", query)
 
 def mark_signal_processed(signal_id):
-    """Menandai sinyal agar tidak diolah ulang."""
-    url = f"{SUPABASE_URL}/rest/v1/ideas" # Cek keberadaan ide terkait
-    patch_url = f"{SUPABASE_URL}/rest/v1/signals?id=eq.{signal_id}"
-    requests.patch(patch_url, headers=SUPABASE_HEADERS, json={"processed": True})
+    """Marks a signal as processed to avoid duplicates in the next run."""
+    return db.update_record("signals", signal_id, {"processed": True})
 
 def save_ideas_to_db(ideas_data, signal_ids):
-    """Menyimpan ide ke tabel ideas sesuai skema baru."""
-    url = f"{SUPABASE_URL}/rest/v1/ideas"
+    """Persists generated ideas and marks their source signals as processed."""
     success_count = 0
     
     for item in ideas_data:
@@ -77,50 +28,55 @@ def save_ideas_to_db(ideas_data, signal_ids):
             "audience": item.get("audience", "General Target")
         }
         
+        # Using database wrapper for insertion
+        # Note: we use a simple POST here, for production we might add a 'create_record' to core.database
+        url = f"{settings.SUPABASE_URL}/rest/v1/ideas"
+        headers = {
+            "apikey": settings.SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {settings.SUPABASE_ANON_KEY}",
+            "Content-Type": "application/json"
+        }
+        
         try:
-            r = requests.post(url, headers=SUPABASE_HEADERS, json=payload)
+            r = requests.post(url, headers=headers, json=payload)
             if r.status_code in [200, 201, 204]:
                 success_count += 1
         except Exception as e:
-            print(f"Error saving to DB: {e}")
+            print(f"❌ Error saving idea to DB: {e}")
 
-    # Jika berhasil simpan ide, tandai sinyal asal sebagai 'processed'
     if success_count > 0:
         for sid in signal_ids:
             mark_signal_processed(sid)
     
     return success_count
 
-# ================================
-# AI ENGINE (With Robust Fallback)
-# ================================
-
 def discover_free_models():
-    """Mencari model gratis baru jika list utama gagal semua."""
+    """Discovers new free models dynamically from OpenRouter if static list fails."""
     try:
-        r = requests.get("https://openrouter.ai/api/v1/models")
+        r = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
         if r.status_code == 200:
-            models = r.json()["data"]
+            models = r.json().get("data", [])
             return [m["id"] for m in models if ":free" in m["id"]]
     except:
         return []
     return []
 
 def call_ai(prompt):
+    """Calls AI models with a robust fallback mechanism using the centralized model list."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/ai-startup-factory",
         "X-Title": "AI Startup Factory"
     }
 
-    # Gabungkan list utama dengan penemuan baru, lalu acak
-    all_potential_models = list(set(MODEL_LIST + discover_free_models()))
+    # Combine static models from core with dynamic ones
+    all_potential_models = list(set(settings.MODELS + discover_free_models()))
     random.shuffle(all_potential_models)
 
     for model in all_potential_models:
-        print(f"Trying model: {model}")
+        print(f"🤖 Trying model: {model}")
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -129,56 +85,42 @@ def call_ai(prompt):
         }
 
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=45)
-            
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
             if r.status_code == 200:
-                content = r.json()["choices"][0]["message"]["content"]
-                if content: return content
-            
+                return r.json()["choices"][0]["message"]["content"]
             elif r.status_code == 429:
-                print(f"Rate limit hit for {model}. Switching model...")
+                print(f"⚠️ Rate limit for {model}. Switching...")
                 continue
-            else:
-                print(f"Model {model} returned status {r.status_code}")
-                continue
-        except Exception as e:
-            print(f"Connection error with {model}: {e}")
+        except:
             continue
-
     return None
 
-# ================================
-# MAIN PIPELINE
-# ================================
-
 def main():
-    print("\n--- Starting Idea Generation Pipeline ---")
+    print("\n🚀 AI Startup Factory: Idea Generation Pipeline")
     
     signals = load_signals()
     if not signals:
-        print("No unprocessed signals found in database.")
+        print("✅ No new signals to process.")
         return
 
     signal_titles = [s["title"] for s in signals]
     signal_ids = [s["id"] for s in signals]
     
-    print(f"Processing {len(signal_titles)} signals...")
+    print(f"📡 Processing {len(signal_titles)} signals to generate ideas...")
 
     prompt = f"""
-    Based on these emerging technology signals:
-    {json.dumps(signal_titles)}
-
-    Generate a JSON list of {MAX_IDEAS} startup ideas.
+    Based on these emerging tech signals: {json.dumps(signal_titles)}
+    Generate a JSON list of {settings.MAX_IDEAS_PER_RUN} startup ideas.
     Each idea MUST focus on a specific, non-obvious problem.
     
-    REQUIRED JSON FORMAT (return ONLY this):
+    RETURN ONLY JSON:
     {{
       "ideas": [
         {{
-          "problem": "detailed specific problem description",
-          "solution": "how technology solves it specifically",
-          "market": "industry category",
-          "audience": "who has this problem"
+          "problem": "detailed description",
+          "solution": "specific technical solution",
+          "market": "category",
+          "audience": "target user"
         }}
       ]
     }}
@@ -186,28 +128,24 @@ def main():
 
     response = call_ai(prompt)
     if not response:
-        print("CRITICAL: All AI models failed or returned empty results.")
+        print("❌ CRITICAL: All AI models failed.")
         return
 
     try:
-        # Robust Parsing: Bersihkan markdown jika ada
+        # Clean potential markdown wrapping
         clean_json = re.sub(r"```json\s?|\s?```", "", response).strip()
         data = json.loads(clean_json)
-        
-        # Ambil list ide (handle jika AI membungkus dalam key 'ideas' atau langsung list)
         ideas_list = data.get("ideas", data) if isinstance(data, dict) else data
 
         if not isinstance(ideas_list, list):
-            print("Error: AI did not return a list of ideas.")
+            print("❌ AI returned invalid format (not a list).")
             return
 
-        print(f"Successfully generated {len(ideas_list)} ideas. Syncing to Supabase...")
         saved = save_ideas_to_db(ideas_list, signal_ids)
-        print(f"Pipeline finished. {saved} ideas saved to database.")
+        print(f"✅ Pipeline finished. {saved} new ideas born.")
 
     except Exception as e:
-        print(f"Failed to parse AI response: {e}")
-        print("Raw AI Output was:", response[:300])
+        print(f"❌ Failed to parse AI response: {e}")
 
 if __name__ == "__main__":
     main()
