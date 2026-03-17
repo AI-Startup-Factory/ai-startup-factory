@@ -65,7 +65,7 @@ jobs:
       # -------------------------------------------------
       - name: Market Analysis & Discovery
         run: |
-          python -m agents.clusterer.clusterer
+          python -m agents.idea_clusterer.clusterer
           python -m agents.market_analyzer.analyzer
           python -m agents.opportunity_discovery.vector_discovery
 
