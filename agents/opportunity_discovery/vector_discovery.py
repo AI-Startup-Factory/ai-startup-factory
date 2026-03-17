@@ -1,13 +1,14 @@
 import json
 import random
 import requests
-# Import core infrastructure
+import re
 from core.config import settings
 from core.database import db
 
 def fetch_clustered_ideas():
     """Retrieves all ideas that have been assigned to a cluster."""
-    query = "select=id,problem,cluster_id&cluster_id=not.is.null"
+    # Gunakan format is.not.null yang lebih stabil
+    query = "select=id,problem,cluster_id&cluster_id=is.not.null"
     return db.fetch_records("ideas", query)
 
 def group_by_cluster(rows):
@@ -23,11 +24,12 @@ def group_by_cluster(rows):
     return clusters
 
 def call_discovery_ai(cluster_id, problems):
-    """Calls AI to identify missing gaps within a specific cluster."""
+    """Calls AI with fallback mechanism."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ai-startup-factory"
     }
     
     context_text = "\n- ".join(problems)
@@ -40,21 +42,22 @@ def call_discovery_ai(cluster_id, problems):
     
     TASK:
     Identify 2-3 'Missing Adjacent Opportunities' or Gaps. 
-    These should be logical extensions or underserved niches that are NOT explicitly listed above but fit in this cluster.
+    These should be logical extensions or underserved niches that fit in this cluster.
     
-    Return ONLY a JSON object with this structure:
+    Return ONLY a JSON object:
     {{
       "gaps": [
         {{
-          "title": "Short title for the gap",
+          "title": "Short title",
           "description": "Why this is a missing opportunity"
         }}
       ]
     }}
     """
 
-    # Use robust model fallback from core
-    all_models = settings.MODELS.copy()
+    # Gunakan getattr agar tidak AttributeError
+    static_models = getattr(settings, "MODELS", ["google/gemini-2.0-flash-exp:free"])
+    all_models = static_models.copy()
     random.shuffle(all_models)
 
     for model in all_models:
@@ -67,47 +70,40 @@ def call_discovery_ai(cluster_id, problems):
             }, timeout=60)
             
             if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
-        except:
+                content = r.json()["choices"][0]["message"]["content"]
+                # Bersihkan markdown jika ada
+                clean_content = re.sub(r"```json\s?|\s?```", "", content).strip()
+                return clean_content
+        except Exception as e:
+            print(f"⚠️ Model {model} failed: {e}")
             continue
     return None
 
 def save_gap_as_signal(gap):
-    """Saves the identified gap back into the signals table for the next generation cycle."""
-    url = f"{settings.SUPABASE_URL}/rest/v1/signals"
-    headers = {
-        "apikey": settings.SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {settings.SUPABASE_ANON_KEY}",
-        "Content-Type": "application/json"
-    }
+    """Saves the identified gap back into the signals table using core database."""
     payload = {
         "title": gap.get("title"),
         "content": gap.get("description"),
         "processed": False,
         "source": "vector_discovery_agent"
     }
-    try:
-        r = requests.post(url, headers=headers, json=payload)
-        return r.status_code in [200, 201, 204]
-    except:
-        return False
+    # MENGGUNAKAN WRAPPER DATABASE CORE
+    return db.insert_record("signals", payload)
 
 def main():
     print("=== AI Startup Factory: Vector Gap Discovery ===")
     
-    # 1. Fetch and Group
     rows = fetch_clustered_ideas()
     if not rows:
-        print("✅ No clustered ideas found. Run the Clusterer first.")
+        print("✅ No clustered ideas found for gap analysis.")
         return
 
     clusters = group_by_cluster(rows)
     total_gaps_found = 0
 
-    # 2. Analyze Gaps per Cluster
     for cid, problems in clusters.items():
-        # Only analyze mature clusters with enough data points
-        if len(problems) < 3:
+        # Fokus pada cluster yang sudah punya cukup konteks
+        if len(problems) < 2:
             continue
 
         print(f"📡 Processing Cluster {cid} ({len(problems)} ideas)...")
