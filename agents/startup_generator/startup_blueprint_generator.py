@@ -4,24 +4,17 @@ import re
 import requests
 from core.config import settings
 from core.database import db
-
-# List model untuk rotasi anti rate-limit
-MODEL_LIST = [
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemma-3-27b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen-72b-chat:free"
-]
+# Mengimpor daftar model dari modul core
+from core.models import MODEL_LIST 
 
 def fetch_top_opportunities(limit=5):
     """Mengambil ide dengan skor tertinggi yang belum memiliki blueprint."""
-    # Menggunakan sorting desc agar ide paling potensial dikerjakan duluan
+    # Menggunakan sorting DESC agar ide paling potensial dikerjakan lebih dulu
     query = f"opportunity_score=is.not.null&startup_name=is.null&order=opportunity_score.desc&limit={limit}"
     return db.fetch_records("ideas", query)
 
 def call_openrouter(prompt):
-    """Memanggil OpenRouter dengan sistem fallback model."""
+    """Memanggil OpenRouter dengan sistem fallback model dari core.models."""
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -36,69 +29,79 @@ def call_openrouter(prompt):
             "response_format": {"type": "json_object"}
         }
         try:
-            # Menggunakan timeout agar tidak menggantung jika model lambat
-            r = requests.post("https://openrouter.ai/api/v1/chat/completions", 
-                             headers=headers, json=payload, timeout=60)
+            # Gunakan timeout 60 detik agar tidak menghambat pipeline jika satu model lambat
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions", 
+                headers=headers, 
+                json=payload, 
+                timeout=60
+            )
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
+            else:
+                print(f"⚠️ Model {model} mengembalikan status: {r.status_code}")
         except Exception as e:
-            print(f"⚠️ Model {model} gagal: {e}")
+            print(f"⚠️ Koneksi ke {model} gagal: {e}")
             continue
     return None
 
 def main():
     print("=== AI Startup Factory: Blueprint Generator ===")
     
-    # Ambil ide-ide yang sudah diranking oleh Ranker Agent
+    # Ambil ide-ide yang sudah memiliki skor dari Ranker Agent
     rows = fetch_top_opportunities()
 
     if not rows:
-        print("ℹ️ Tidak ada ide yang siap dibuatkan blueprint.")
+        print("ℹ️ Tidak ada ide yang siap dirancang menjadi startup (skor kosong atau sudah diproses).")
         return
+
+    print(f"🎯 Menemukan {len(rows)} peluang untuk dieksekusi.")
 
     for row in rows:
         problem = row.get("problem")
-        print(f"\n🚀 Merancang Startup untuk: {problem[:60]}...")
+        print(f"\n🚀 Merancang konsep startup untuk: {problem[:70]}...")
 
         prompt = f"""
-        Act as a Venture Builder. Create a startup concept for this problem:
-        {problem}
+        Act as a Venture Builder. Create a high-potential startup concept for this problem:
+        "{problem}"
 
-        Return STRICT JSON:
+        Return STRICT JSON format:
         {{
-            "startup_name": "Name",
-            "pitch": "Elevator pitch",
-            "mvp_features": ["feature1", "feature2"],
-            "tech_stack": ["tech1", "tech2"],
-            "go_to_market": "Marketing strategy"
+            "startup_name": "String (Creative name)",
+            "pitch": "String (Elevator pitch)",
+            "mvp_features": ["List of core features"],
+            "tech_stack": ["Recommended languages, DB, and AI models"],
+            "go_to_market": "String (Initial traction strategy)"
         }}
         """
 
         raw_response = call_openrouter(prompt)
-        if not raw_response: continue
+        if not raw_response:
+            print(f"❌ Gagal mendapatkan respon AI untuk ID: {row['id']}")
+            continue
 
         try:
-            # Clean markdown jika ada
+            # Membersihkan tag markdown jika AI menyertakannya dalam output
             clean_json = re.sub(r"```json\s?|\s?```", "", raw_response).strip()
             blueprint = json.loads(clean_json)
 
-            # Update ke database menggunakan skema kolom yang sudah divalidasi
+            # Update ke database menggunakan utilitas core.database
             success = db.update_record("ideas", row["id"], {
                 "startup_name": blueprint.get("startup_name"),
                 "startup_pitch": blueprint.get("pitch"),
-                "mvp_spec": blueprint.get("mvp_features"), # Tipe JSONB
-                "tech_stack": blueprint.get("tech_stack"), # Tipe JSONB
+                "mvp_spec": blueprint.get("mvp_features"), # Kolom JSONB
+                "tech_stack": blueprint.get("tech_stack"), # Kolom JSONB
                 "gtm_plan": blueprint.get("go_to_market")
             })
 
             if success:
-                print(f"✅ Blueprint sukses disimpan: {blueprint.get('startup_name')}")
+                print(f"✅ Blueprint disimpan: {blueprint.get('startup_name')}")
             
-            # Delay kecil untuk menghindari rate limit API
-            time.sleep(1)
+            # Anti-spam delay
+            time.sleep(1.5)
 
         except Exception as e:
-            print(f"❌ Gagal memproses JSON: {e}")
+            print(f"❌ Kesalahan pemrosesan data: {e}")
 
 if __name__ == "__main__":
     main()
