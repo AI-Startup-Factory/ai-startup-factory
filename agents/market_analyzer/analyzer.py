@@ -2,17 +2,17 @@ import json
 import re
 import time
 import requests
-# Import infrastruktur core
 from core.config import settings
 from core.database import db
 
 def load_pending_ideas():
-    """Retrieves ideas that haven't been analyzed for trend strength yet."""
+    """Mengambil ide yang belum dianalisis (trend_strength is null)."""
+    # Pastikan mengambil ID dan Problem
     query = "trend_strength=is.null&select=id,problem&limit=10"
     return db.fetch_records("ideas", query)
 
 def update_idea_analysis(idea_id, analysis):
-    """Updates the idea with market analysis results."""
+    """Menyimpan hasil analisis ke Supabase."""
     payload = {
         "market_size": analysis.get("market_size"),
         "competition": analysis.get("competition"),
@@ -22,7 +22,6 @@ def update_idea_analysis(idea_id, analysis):
     return db.update_record("ideas", idea_id, payload)
 
 def discover_extra_models():
-    """Checks OpenRouter for any new free models not in our static list."""
     try:
         r = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
         if r.status_code == 200:
@@ -33,7 +32,6 @@ def discover_extra_models():
     return []
 
 def call_market_ai(prompt):
-    """Executes AI analysis with robust fallback and JSON extraction."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
@@ -41,8 +39,9 @@ def call_market_ai(prompt):
         "HTTP-Referer": "https://github.com/ai-startup-factory"
     }
 
-    # Merging static core models with dynamic discovery
-    potential_models = list(set(settings.MODELS + discover_extra_models()))
+    # Ambil MODELS dari config, fallback ke list manual jika belum diupdate
+    static_models = getattr(settings, "MODELS", ["google/gemini-2.0-flash-exp:free"])
+    potential_models = list(set(static_models + discover_extra_models()))
     
     for model in potential_models:
         print(f"🔬 Analyzing market with model: {model}")
@@ -56,13 +55,10 @@ def call_market_ai(prompt):
             r = requests.post(url, headers=headers, json=payload, timeout=120)
             if r.status_code == 200:
                 content = r.json()["choices"][0]["message"]["content"]
-                # Cleaning and extraction
                 clean_content = re.sub(r"```json\s?|\s?```", "", content).strip()
                 data = json.loads(clean_content)
-                
-                # Handle both direct array or wrapped object
-                return data.get("analysis", data) if isinstance(data, dict) else data
-            
+                # Ambil list 'analysis'
+                return data.get("analysis", data)
             elif r.status_code == 429:
                 print(f"⚠️ Rate limit for {model}. Skipping...")
         except Exception as e:
@@ -76,25 +72,27 @@ def main():
     
     ideas = load_pending_ideas()
     if not ideas:
-        print("✅ All ideas have been analyzed.")
+        print("✅ No pending ideas for analysis.")
         return
 
     print(f"📡 Analyzing batch of {len(ideas)} ideas...")
     
-    problems_list = [i["problem"] for i in ideas]
+    # PERBAIKAN: Kirim ID ke AI agar mapping 100% akurat
+    analysis_input = [{"id": i["id"], "problem": i["problem"]} for i in ideas]
+    
     prompt = f"""
     Analyze the following startup problems for market viability.
     Return ONLY a JSON object with a key "analysis" containing an array of objects.
 
     Each object must have:
-    - problem (original text)
-    - market_size (description)
-    - competition (description)
-    - trend_strength (score 1-10)
-    - success_probability (score 1-10)
+    - id (MUST match the provided ID exactly)
+    - market_size (brief description)
+    - competition (brief description)
+    - trend_strength (integer 1-10)
+    - success_probability (integer 1-10)
 
-    Problems to analyze:
-    {json.dumps(problems_list, indent=2)}
+    Data to analyze:
+    {json.dumps(analysis_input, indent=2)}
     """
 
     results = call_market_ai(prompt)
@@ -102,18 +100,16 @@ def main():
         print("❌ Market analysis failed for this batch.")
         return
 
-    # Create mapping for efficient updates
-    problem_to_id = {i["problem"]: i["id"] for i in ideas}
     success_updates = 0
-
     if isinstance(results, list):
         for item in results:
-            prob_text = item.get("problem")
-            if prob_text in problem_to_id:
-                idea_id = problem_to_id[prob_text]
+            idea_id = item.get("id")
+            if idea_id:
                 if update_idea_analysis(idea_id, item):
                     success_updates += 1
-                    print(f"✅ Analysis saved for ID: {idea_id}")
+                    print(f"✅ Saved analysis for ID: {idea_id}")
+                else:
+                    print(f"⚠️ Failed to update DB for ID: {idea_id}")
 
     print(f"=== Analysis Completed: {success_updates}/{len(ideas)} updated ===")
 
