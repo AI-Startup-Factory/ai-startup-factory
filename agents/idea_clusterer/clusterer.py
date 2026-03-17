@@ -82,6 +82,10 @@ def main():
         else:
             print(f"⚠️ Failed to update record ID: {row_id}")
 
+    records = db.fetch_records("ideas", "select=*&limit=5")
+            print(f"DEBUG: First record keys: {records[0].keys() if records else 'Empty'}")
+
+
     print(f"✅ Clustering complete. {success_count}/{total_samples} records updated.")
 
 if __name__ == "__main__":
