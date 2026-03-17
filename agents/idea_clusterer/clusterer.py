@@ -6,14 +6,15 @@ from core.database import db
 
 def fetch_ideas_with_embeddings():
     """
-    Fetches all ideas that have embeddings for clustering process.
+    Mengambil ide yang sudah memiliki embedding tetapi belum dikelompokkan (cluster_id null).
     """
-    query = "select=id,problem,problem_embedding&problem_embedding=not.is.null"
+    # Menggunakan is.not.null untuk standar PostgREST
+    query = "select=id,problem,problem_embedding&problem_embedding=is.not.null&cluster_id=is.null"
     return db.fetch_records("ideas", query)
 
 def update_cluster_metadata(row_id, cluster_id, size):
     """
-    Persists the cluster assignment and cluster size to the database.
+    Menyimpan hasil clustering ke database.
     """
     payload = {
         "cluster_id": int(cluster_id),
@@ -28,7 +29,7 @@ def main():
     rows = fetch_ideas_with_embeddings()
     
     if not rows:
-        print("❌ No data found with valid embeddings. Run the Embedding Agent first.")
+        print("✅ No new ideas found with valid embeddings. Everything is already clustered.")
         return
 
     vectors = []
@@ -36,22 +37,27 @@ def main():
 
     # 2. Vector Preparation
     for r in rows:
-        # Core database already returns list for JSONB columns, so no manual parsing needed
         vec = r.get("problem_embedding")
         if vec and isinstance(vec, list):
-            vectors.append(vec)
-            ids.append(r["id"])
+            # Pastikan dimensi sesuai (384 untuk all-MiniLM-L6-v2)
+            if len(vec) == 384:
+                vectors.append(vec)
+                ids.append(r["id"])
 
     if not vectors:
-        print("❌ No usable embedding vectors available.")
+        print("❌ No usable embedding vectors available (check dimension or nulls).")
         return
 
     X = np.array(vectors)
     total_samples = len(X)
 
-    # 3. Dynamic Cluster Count Determination (Rule of Thumb: √N)
-    # We ensure a minimum of 3 clusters for meaningful grouping
-    n_clusters = max(3, int(math.sqrt(total_samples)))
+    # 3. Dynamic Cluster Count Determination
+    # Perbaikan: Pastikan n_clusters tidak lebih besar dari jumlah sampel
+    n_clusters = max(1, min(int(math.sqrt(total_samples)), total_samples))
+    
+    if total_samples < 2:
+        print(f"ℹ️ Too few samples ({total_samples}) for clustering. Skipping...")
+        return
 
     print(f"📡 Total Ideas to Cluster: {total_samples}")
     print(f"🤖 Initializing KMeans with {n_clusters} clusters...")
@@ -65,8 +71,7 @@ def main():
     
     labels = kmeans.fit_predict(X)
 
-    # 5. Calculate Frequency (Cluster Size)
-    # This helps identify the most "crowded" or trending opportunity areas
+    # 5. Calculate Frequency
     cluster_sizes = {}
     for label in labels:
         cluster_sizes[label] = cluster_sizes.get(label, 0) + 1
@@ -82,9 +87,13 @@ def main():
         else:
             print(f"⚠️ Failed to update record ID: {row_id}")
 
-    records = db.fetch_records("ideas", "select=*&limit=5")
-            print(f"DEBUG: First record keys: {records[0].keys() if records else 'Empty'}")
-
+    # PERBAIKAN: Indentasi disejajarkan dengan blok utama main()
+    try:
+        debug_check = db.fetch_records("ideas", "select=id,problem_embedding&limit=1")
+        if debug_check:
+            print(f"DEBUG: Data check successful. Keys found: {list(debug_check[0].keys())}")
+    except Exception as e:
+        print(f"DEBUG: Metadata check skipped: {e}")
 
     print(f"✅ Clustering complete. {success_count}/{total_samples} records updated.")
 
