@@ -75,10 +75,9 @@ jobs:
           python -m agents.opportunity_ranker.ranker
           python -m agents.startup_generator.startup_blueprint_generator
 
-      - name: Test Web & Momentum
+      - name: Momentum
         run: |
           python -m agents.trend_momentum.momentum
-          python -m agents.web_generator.landing_page_gen
 
       # -------------------------------------------------
       # 5. DIAGNOSTICS
