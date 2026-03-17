@@ -1,159 +1,104 @@
-import os
-import requests
-import json
 import time
+import json
 import re
+import requests
+from core.config import settings
+from core.database import db
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# ====================================
-# PRIMARY MODEL LIST (ANTI RATE LIMIT)
-# ====================================
+# List model untuk rotasi anti rate-limit
 MODEL_LIST = [
+    "google/gemini-2.0-flash-exp:free",
     "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
-    "google/gemma-3-4b-it:free",
-    "google/gemma-3n-e2b-it:free",
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "qwen/qwen3-4b:free",
-    "qwen/qwen3-coder:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "stepfun/step-3.5-flash:free",
-    "arcee-ai/trinity-mini:free",
-    "z-ai/glm-4.5-air:free",
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+    "qwen/qwen-72b-chat:free"
 ]
 
-headers = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
-}
+def fetch_top_opportunities(limit=5):
+    """Mengambil ide dengan skor tertinggi yang belum memiliki blueprint."""
+    # Menggunakan sorting desc agar ide paling potensial dikerjakan duluan
+    query = f"opportunity_score=is.not.null&startup_name=is.null&order=opportunity_score.desc&limit={limit}"
+    return db.fetch_records("ideas", query)
 
-# ====================================
-# FETCH OPPORTUNITIES (THRESHOLD ADJUSTED)
-# ====================================
-def fetch_opportunities():
-    # Menurunkan threshold ke 20 agar ide bernilai 21-25 masuk ke generator
-    url = f"{SUPABASE_URL}/rest/v1/ideas?select=id,problem,opportunity_score&opportunity_score=gte.20&startup_name=is.null&limit=5"
-    
-    try:
-        r = requests.get(url, headers=headers)
-        if r.status_code != 200:
-            print("Fetch error:", r.text)
-            return []
-        return r.json()
-    except:
-        return []
-
-# ====================================
-# CALL AI WITH FALLBACK
-# ====================================
-def call_ai(prompt):
-    headers_ai = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+def call_openrouter(prompt):
+    """Memanggil OpenRouter dengan sistem fallback model."""
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/ai-startup-factory"
     }
 
     for model in MODEL_LIST:
-        print("Trying model:", model)
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
             "response_format": {"type": "json_object"}
         }
-
         try:
-            r = requests.post(OPENROUTER_URL, headers=headers_ai, json=payload, timeout=90)
+            # Menggunakan timeout agar tidak menggantung jika model lambat
+            r = requests.post("https://openrouter.ai/api/v1/chat/completions", 
+                             headers=headers, json=payload, timeout=60)
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
-            continue
-        except:
+        except Exception as e:
+            print(f"⚠️ Model {model} gagal: {e}")
             continue
     return None
 
-# ====================================
-# GENERATE STARTUP BLUEPRINT
-# ====================================
-def generate_startup(problem):
-    prompt = f"""
-You are a startup studio. Create a startup concept solving this problem.
-Problem: {problem}
-
-Return STRICT JSON format:
-{{
-"startup_name": "...",
-"pitch": "...",
-"mvp_features": ["f1", "f2", "f3"],
-"tech_stack": ["fe", "be", "ai", "infra"],
-"go_to_market": "..."
-}}
-"""
-    response = call_ai(prompt)
-    if not response: return None
-
-    try:
-        # Pembersihan tag markdown jika AI menyertakannya
-        clean_json = re.sub(r"```json\s?|\s?```", "", response).strip()
-        return json.loads(clean_json)
-    except Exception as e:
-        print("JSON parse error for response:", response[:100])
-        return None
-
-# ====================================
-# UPDATE DATABASE
-# ====================================
-def update_row(row_id, blueprint):
-    payload = {
-        "startup_name": blueprint.get("startup_name", "Unnamed Startup"),
-        "startup_pitch": blueprint.get("pitch", ""),
-        "mvp_spec": blueprint.get("mvp_features", []),
-        "tech_stack": blueprint.get("tech_stack", []),
-        "gtm_plan": blueprint.get("go_to_market", "")
-    }
-
-    url = f"{SUPABASE_URL}/rest/v1/ideas?id=eq.{row_id}"
-    r = requests.patch(url, headers=headers, json=payload)
-
-    if r.status_code in [200, 204]:
-        print(f"✅ Startup blueprint generated for ID: {row_id}")
-    else:
-        print(f"❌ Update failed: {r.text}")
-
-# ====================================
-# MAIN
-# ====================================
 def main():
     print("=== AI Startup Factory: Blueprint Generator ===")
-    rows = fetch_opportunities()
+    
+    # Ambil ide-ide yang sudah diranking oleh Ranker Agent
+    rows = fetch_top_opportunities()
 
     if not rows:
-        print("No ideas found with score >= 20. Waiting for better opportunities.")
+        print("ℹ️ Tidak ada ide yang siap dibuatkan blueprint.")
         return
 
-    print(f"Found {len(rows)} opportunities to build.")
-
     for row in rows:
-        problem = row["problem"]
-        print(f"\nGenerating startup for: {problem[:70]}...")
+        problem = row.get("problem")
+        print(f"\n🚀 Merancang Startup untuk: {problem[:60]}...")
 
-        blueprint = generate_startup(problem)
-        if not blueprint:
-            continue
+        prompt = f"""
+        Act as a Venture Builder. Create a startup concept for this problem:
+        {problem}
 
-        update_row(row["id"], blueprint)
-        time.sleep(2)
+        Return STRICT JSON:
+        {{
+            "startup_name": "Name",
+            "pitch": "Elevator pitch",
+            "mvp_features": ["feature1", "feature2"],
+            "tech_stack": ["tech1", "tech2"],
+            "go_to_market": "Marketing strategy"
+        }}
+        """
+
+        raw_response = call_openrouter(prompt)
+        if not raw_response: continue
+
+        try:
+            # Clean markdown jika ada
+            clean_json = re.sub(r"```json\s?|\s?```", "", raw_response).strip()
+            blueprint = json.loads(clean_json)
+
+            # Update ke database menggunakan skema kolom yang sudah divalidasi
+            success = db.update_record("ideas", row["id"], {
+                "startup_name": blueprint.get("startup_name"),
+                "startup_pitch": blueprint.get("pitch"),
+                "mvp_spec": blueprint.get("mvp_features"), # Tipe JSONB
+                "tech_stack": blueprint.get("tech_stack"), # Tipe JSONB
+                "gtm_plan": blueprint.get("go_to_market")
+            })
+
+            if success:
+                print(f"✅ Blueprint sukses disimpan: {blueprint.get('startup_name')}")
+            
+            # Delay kecil untuk menghindari rate limit API
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"❌ Gagal memproses JSON: {e}")
 
 if __name__ == "__main__":
     main()
