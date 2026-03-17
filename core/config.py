@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     AI_STARTUP_TOKEN: str | None = None
 
     # Pipeline Limits (Tambahkan baris ini)
-    MAX_SIGNALS_PER_RUN: int = 20
-    MAX_IDEAS_PER_RUN: int = 50
+    MAX_SIGNALS_PER_RUN: int = 10
+    MAX_IDEAS_PER_RUN: int = 10
 
     model_config = SettingsConfigDict(
         env_file=".env", 
