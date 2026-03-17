@@ -1,14 +1,37 @@
 import math
 import numpy as np
+import json
 from sklearn.cluster import KMeans
 from core.config import settings
 from core.database import db
-# Import utilitas proyeksi Anda
 from agents.utils.vector_projection import project_vector 
 
 def fetch_ideas_with_embeddings():
-    query = "select=id,problem,problem_embedding&problem_embedding=is.not.null&cluster_id=is.null"
-    return db.fetch_records("ideas", query)
+    """
+    Mengambil data dengan filter minimal untuk menghindari kegagalan filter URL.
+    Validasi dilakukan secara manual di memori Python.
+    """
+    # Hanya filter cluster_id yang null
+    query = "select=id,problem,problem_embedding&cluster_id=is.null"
+    
+    try:
+        rows = db.fetch_records("ideas", query)
+        if not rows:
+            return []
+            
+        # Filter manual di Python untuk memastikan problem_embedding tersedia
+        valid_rows = []
+        for r in rows:
+            emb = r.get("problem_embedding")
+            if emb is not None:
+                valid_rows.append(r)
+        
+        print(f"DEBUG: SQL found {len(rows)} records with null cluster_id.")
+        print(f"DEBUG: {len(valid_rows)} of those have non-null embeddings.")
+        return valid_rows
+    except Exception as e:
+        print(f"❌ Error fetching records: {e}")
+        return []
 
 def update_cluster_metadata(row_id, cluster_id, size):
     payload = {
@@ -34,9 +57,15 @@ def main():
     for r in rows:
         vec = r.get("problem_embedding")
         
+        # Penanganan jika format dari DB adalah string (JSON-like)
+        if isinstance(vec, str):
+            try:
+                vec = json.loads(vec)
+            except:
+                continue
+        
         if vec:
-            # Gunakan utilitas proyeksi Anda untuk memastikan dimensi ALWAYS 384
-            # Ini akan menangani dimensi 1536, 1024, dll secara otomatis
+            # Pastikan diproyeksikan ke target 384
             projected_vec = project_vector(vec)
             
             if projected_vec and len(projected_vec) == 384:
@@ -44,18 +73,18 @@ def main():
                 ids.append(r["id"])
 
     if not vectors:
-        print("❌ No usable embedding vectors found after projection check.")
+        print("❌ No usable embedding vectors found after dimension check.")
         return
 
     X = np.array(vectors)
     total_samples = len(X)
 
-    # KMeans butuh n_samples >= n_clusters
-    # Kita buat n_clusters dinamis namun aman
+    # Handling jika ide terlalu sedikit untuk membentuk klaster KMeans murni
     if total_samples < 2:
         print(f"ℹ️ Only {total_samples} sample(s). Assigning to default cluster 0...")
         for row_id in ids:
             update_cluster_metadata(row_id, 0, 1)
+        print("✅ Success: Assigned to default cluster.")
         return
 
     n_clusters = max(1, min(int(math.sqrt(total_samples)), total_samples))
