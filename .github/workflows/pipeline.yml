@@ -87,10 +87,6 @@ jobs:
       - name: External Momentum Validation
         run: python -m agents.trend_momentum.momentum
 
-      - name: Build Web Assets (Landing Pages)
-        # Tahap terakhir: Membuat aset visual yang bisa dipamerkan
-        run: python -m agents.web_generator.landing_page_gen
-
       # -------------------------------------------------
       # DEPLOYMENT (Optional: Deploy to GitHub Pages)
       # -------------------------------------------------
